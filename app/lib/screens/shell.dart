@@ -39,8 +39,15 @@ class _ShellScreenState extends State<ShellScreen> {
       setState(() {branches=all;if(branchId.isEmpty && all.isNotEmpty)branchId=all.first['id'].toString();});
     }catch(_){/* The dashboard will show a detailed connection error. */}
   }
-  void _logout() {widget.api.token=null;Navigator.of(context).pushAndRemoveUntil(
-    MaterialPageRoute(builder:(_)=>const LoginScreen()),(_)=>false);}
+  Future<void> _logout() async {
+    try {await widget.api.post('auth/logout',{},idempotent:false);} catch (_) {
+      // Clear local session even when the branch server is unreachable.
+    }
+    widget.api.token=null;
+    if(!mounted)return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder:(_)=>const LoginScreen()),(_)=>false);
+  }
   bool _visible(int index)=>switch(role) {
     'cashier'=>[1,2,4,6,10,12].contains(index),
     'stock'=>[2,7,10,13].contains(index),

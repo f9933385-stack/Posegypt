@@ -21,7 +21,8 @@ class _ReturnsState extends State<ReturnsPage> {
   void _reload()=>setState(()=>documents=widget.api.list('documents',{'branch_id':widget.branchId}));
   @override void dispose(){qty.dispose();super.dispose();}
   Future<void> _choose(String id,List<Map<String,dynamic>> docs) async {
-    setState(() {selectedDoc=docs.firstWhere((x)=>x['id']==id);full=null;lineId=null;loading=true;});
+    setState(() {selectedDoc=docs.firstWhere((x)=>x['id']==id);full=null;lineId=null;loading=true;
+      method=selectedDoc?['kind']=='purchase'?'credit':'cash';});
     try {final d=await widget.api.get('documents/$id');if(mounted)setState(()=>full=d);}
     catch(e){if(mounted)alert(context,'تعذر تحميل المستند: $e',error:true);}
     finally{if(mounted)setState(()=>loading=false);}
@@ -33,7 +34,7 @@ class _ReturnsState extends State<ReturnsPage> {
       final isSale=selectedDoc!['kind']=='sale';
       final result=await widget.api.post(isSale?'sales/returns':'purchases/returns',{
         'branch_id':widget.branchId,'original_id':selectedDoc!['id'],
-        if(isSale)'refund_method':method,
+        'refund_method':method,
         'lines':[{'original_line_id':lineId,'qty_milli':parseQty(qty.text)}]});
       if(!mounted)return;
       alert(context,'تم إنشاء المرتجع ${result['id']}');
@@ -60,11 +61,11 @@ class _ReturnsState extends State<ReturnsPage> {
             value:x['id'].toString(),child:Text('${x['product_id']} — ${quantity(asInt(x['qty_milli']))}'))],
           onChanged:(v)=>setState(()=>lineId=v)),
         const SizedBox(height:12),TextField(controller:qty,decoration:const InputDecoration(labelText:'الكمية المرتجعة')),
-        if(selectedDoc?['kind']=='sale') ...[
+        if(selectedDoc?['kind']=='sale' || selectedDoc?['kind']=='purchase') ...[
           const SizedBox(height:12),DropdownButtonFormField<String>(value:method,
             decoration:const InputDecoration(labelText:'طريقة الاسترداد'),
-            items:const [DropdownMenuItem(value:'cash',child:Text('رد نقدي (فاتورة مسددة بالكامل)')),
-              DropdownMenuItem(value:'credit',child:Text('رصيد على حساب العميل'))],
+            items:[const DropdownMenuItem(value:'cash',child:Text('استرداد نقدي (فاتورة مسددة بالكامل)')),
+              DropdownMenuItem(value:'credit',child:Text(selectedDoc?['kind']=='sale'?'رصيد على حساب العميل':'رصيد لدى المورد'))],
             onChanged:(v)=>setState(()=>method=v??method)),
         ],
         const SizedBox(height:20),FilledButton.icon(onPressed:posting?null:_submit,

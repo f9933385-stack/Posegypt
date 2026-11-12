@@ -511,9 +511,11 @@ class PosEngine {
       throw DomainError('Credit sales must be refunded to customer account');
     }
     final lines=<Map<String,dynamic>>[];
+    final returnedLineIds=<String>{};
     var net=0,tax=0,cogs=0;
     for(final x in _inputLines(input)) {
       final lineId=nonEmpty(x['original_line_id'],'original_line_id');
+      if(!returnedLineIds.add(lineId)) throw DomainError('Duplicate original line in the same return',409);
       final originalLine=_originalLine(original,lineId);
       final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
       if(qty>(originalLine['remaining'] as int)) throw DomainError('Returned quantity exceeds sold quantity',409);
@@ -557,10 +559,12 @@ class PosEngine {
     final warehouse=_warehouse(branch,input['warehouse_id'] ?? doc0['warehouse_id']);
     final supplier=doc0['party_id'] as String;
     final lines=<Map<String,dynamic>>[];
+    final returnedLineIds=<String>{};
     var net=0,tax=0,stockCost=0;
     final docId=_id();
     for(final x in _inputLines(input)) {
       final lineId=nonEmpty(x['original_line_id'],'original_line_id');
+      if(!returnedLineIds.add(lineId)) throw DomainError('Duplicate original line in the same return',409);
       final originalLine=_originalLine(original,lineId);
       final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
       if(qty>(originalLine['remaining'] as int)) throw DomainError('Returned quantity exceeds purchased quantity',409);

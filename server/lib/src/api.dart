@@ -88,7 +88,7 @@ class KasherApi {
         return _json({'error':'Invalid input format'},status:400);
       } on ArgumentError catch(_) {
         return _json({'error':'Invalid numeric input'},status:400);
-      } on Object catch(e) {
+      } on Object {
         // Never leak SQL, password hashes or internal paths over LAN.
         // Internal errors should be sent to a sanitized operational logger.
         return _json({'error':'Internal server error'},status:500);

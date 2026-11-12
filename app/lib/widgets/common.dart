@@ -40,7 +40,7 @@ class AsyncPanel<T> extends StatelessWidget {
   @override Widget build(BuildContext context)=>FutureBuilder<T>(future:future,builder:(context,snapshot){
     if(snapshot.hasError)return Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
       Icon(Icons.error_outline,color:Theme.of(context).colorScheme.error,size:38),
-      const SizedBox(height:8),Text('تعذر تحميل البيانات: ${apiError(snapshot.error)}'),
+      const SizedBox(height:8),Text('تعذر تحميل البيانات: ${apiError(snapshot.error ?? 'خطأ غير معروف')}'),
       TextButton.icon(onPressed:onRetry,icon:const Icon(Icons.refresh),label:const Text('إعادة المحاولة')),
     ]));
     if(!snapshot.hasData)return const Center(child:Padding(padding:EdgeInsets.all(50),child:CircularProgressIndicator()));

@@ -79,6 +79,46 @@ void main() {
     expect(engine.dashboard(owner,branch)['stock_value_minor'],100000);
   });
 
+  test('duplicate sale-return lines cannot refund more than originally sold', () {
+    final product=call('create_product',{'sku':'RETURN-SALE','name_ar':'مكرونة','sell_price_minor':200});
+    final supplier=call('create_supplier',{'name':'مورد'});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':2000,'unit_cost_minor':100}],
+      'payments':<Map<String,dynamic>>[]});
+    final sale=call('sale',{'branch_id':branch,
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':[{'method':'cash','amount_minor':200}]});
+    final invoice=engine.readDocument(owner,sale['id'] as String);
+    final lineId=(invoice['lines'] as List).single['id'];
+    final before=engine.dashboard(owner,branch);
+    final qty=engine.listStock(owner,branch).single['qty_milli'];
+    expect(()=>call('sale_return',{'branch_id':branch,'original_id':sale['id'],
+      'lines':[
+        {'original_line_id':lineId,'qty_milli':1000},
+        {'original_line_id':lineId,'qty_milli':1000},
+      ]}),throwsA(isA<DomainError>()));
+    expect(engine.dashboard(owner,branch),before);
+    expect(engine.listStock(owner,branch).single['qty_milli'],qty);
+  });
+
+  test('duplicate supplier-return lines do not over-credit supplier', () {
+    final product=call('create_product',{'sku':'RETURN-PURCHASE','name_ar':'لبن','sell_price_minor':400});
+    final supplier=call('create_supplier',{'name':'مورد ألبان'});
+    final purchase=call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':2000,'unit_cost_minor':100}],
+      'payments':<Map<String,dynamic>>[]});
+    final invoice=engine.readDocument(owner,purchase['id'] as String);
+    final lineId=(invoice['lines'] as List).single['id'];
+    final before=engine.dashboard(owner,branch);
+    expect(()=>call('purchase_return',{'branch_id':branch,'original_id':purchase['id'],
+      'lines':[
+        {'original_line_id':lineId,'qty_milli':2000},
+        {'original_line_id':lineId,'qty_milli':2000},
+      ]}),throwsA(isA<DomainError>()));
+    expect(engine.dashboard(owner,branch),before);
+    expect(engine.listStock(owner,branch).single['qty_milli'],2000);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

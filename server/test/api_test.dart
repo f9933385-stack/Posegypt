@@ -18,11 +18,11 @@ void main() {
   });
   tearDown(() => store.dispose());
 
-  Future<Response> send(String method,String path,{Object? body,Map<String,String>? headers}) {
+  Future<Response> send(String method,String path,{Object? body,Map<String,String>? headers}) async {
     final request=Request(method,Uri.parse('http://localhost$path'),
       headers:{if(body!=null)'content-type':'application/json',...?headers},
       body:body==null?null:jsonEncode(body));
-    return api.handler(request);
+    return await api.handler(request);
   }
 
   Future<String> token() async {

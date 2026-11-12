@@ -1,0 +1,75 @@
+name: Import existing Kasher source archive
+on:
+  push:
+    branches: [feature/import-kasher-source]
+    paths:
+      - .github/workflows/import-kasher-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.ref == 'refs/heads/feature/import-kasher-source'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated development branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Validate and extract user-provided archive
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess, zipfile
+          archive = Path('Posegypt_Kasher_development_source_2026-11-12.zip')
+          expected_git_sha = 'bea2199b342c2052e04c0d73394b61d1e2d2f8cb'
+          actual = subprocess.check_output(['git','hash-object',str(archive)], text=True).strip()
+          if actual != expected_git_sha:
+              raise RuntimeError('Unexpected source archive SHA; refusing import')
+          root = Path.cwd().resolve()
+          with zipfile.ZipFile(archive) as z:
+              names = z.namelist()
+              if not names or len(names) > 200:
+                  raise RuntimeError('Unexpected source archive listing')
+              for member in z.infolist():
+                  path = member.filename
+                  if not path.startswith('Posegypt/') or path.endswith('/') or member.is_dir():
+                      if member.is_dir():
+                          continue
+                      raise RuntimeError('Unexpected archive entry: ' + path)
+                  relative = Path(path).relative_to('Posegypt')
+                  destination = (root / relative).resolve()
+                  if not destination.is_relative_to(root) or destination == root:
+                      raise RuntimeError('Path traversal blocked: ' + path)
+                  if member.external_attr >> 16 & 0o170000 == 0o120000:
+                      raise RuntimeError('Symlinks forbidden: ' + path)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(z.read(member))
+          for rel in ('README.md', 'docs/PUBLISH_TO_GITHUB.md'):
+              doc = Path(rel)
+              if doc.exists():
+                  s = doc.read_text(encoding='utf-8')
+                  s = s.replace('2753442a/Posegypt', 'f9933385-stack/Posegypt')
+                  doc.write_text(s, encoding='utf-8')
+          p = Path('README.md')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('The connected\n  account has no write permission; the sources in this archive are not in GitHub.',
+                        'Sources are imported on feature/import-kasher-source, subject to CI verification.')
+          p.write_text(s, encoding='utf-8')
+          print('Extracted',len(names),'files from the verified archive.')
+          PY
+      - name: Commit tracked source on development branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to import"
+          else
+            git commit -m "Import Kasher Flutter and Dart source from verified archive"
+            git push origin HEAD:feature/import-kasher-source
+          fi

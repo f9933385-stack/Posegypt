@@ -144,6 +144,46 @@ void main() {
     expect(engine.listStock(owner,branch),before);
   });
 
+  test('fully paid supplier purchase can be refunded as cash', () {
+    final product=call('create_product',{'sku':'CASH-RETURN','name_ar':'دقيق','sell_price_minor':250});
+    final supplier=call('create_supplier',{'name':'مورد دقيق'});
+    final purchase=call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':10000,'unit_cost_minor':100}],
+      'payments':[{'method':'cash','amount_minor':1000}]});
+    final invoice=engine.readDocument(owner,purchase['id'] as String);
+    final lineId=(invoice['lines'] as List).single['id'];
+    final returned=call('purchase_return',{'branch_id':branch,
+      'original_id':purchase['id'],'refund_method':'cash',
+      'lines':[{'original_line_id':lineId,'qty_milli':4000}]});
+    expect(returned['cash_refund_minor'],400);
+    expect(returned['supplier_credit_minor'],0);
+    final dash=engine.dashboard(owner,branch);
+    expect(dash['stock_value_minor'],600);
+    expect(dash['cash_minor'],-600);
+    expect(dash['supplier_payables_minor'],0);
+    expect(engine.listStock(owner,branch).single['qty_milli'],6000);
+  });
+
+  test('partial refunds conserve original pennies over repeated returns', () {
+    final product=call('create_product',{'sku':'ROUND-1','name_ar':'عينة','sell_price_minor':3});
+    final supplier=call('create_supplier',{'name':'المورد'});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,'unit_cost_minor':2}],
+      'payments':<Map<String,dynamic>>[]});
+    final sale=call('sale',{'branch_id':branch,
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':[{'method':'cash','amount_minor':3}]});
+    final lineId=(engine.readDocument(owner,sale['id'] as String)['lines'] as List).single['id'];
+    Map<String,Object?> refund() => call('sale_return',{
+      'branch_id':branch,'original_id':sale['id'],'refund_method':'cash',
+      'lines':[{'original_line_id':lineId,'qty_milli':500}]});
+    expect(refund()['total_minor'],2);
+    expect(refund()['total_minor'],1);
+    expect(engine.dashboard(owner,branch)['cash_minor'],0);
+    expect(engine.dashboard(owner,branch)['sales_minor'],0);
+    expect(engine.listStock(owner,branch).single['qty_milli'],1000);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

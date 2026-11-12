@@ -9,6 +9,7 @@ class KasherApi {
   final PosEngine engine;
   final AuthService auth;
   KasherApi(this.engine,this.auth);
+  final Map<String,List<DateTime>> _loginFailures={};
 
   Response _json(Object? value,{int status=200}) => Response(status,body:jsonEncode(value),
     headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',
@@ -20,9 +21,13 @@ class KasherApi {
   }
   Future<Map<String,dynamic>> _body(Request req) async {
     if(!((req.headers['content-type'] ?? '').startsWith('application/json'))) throw DomainError('Content-Type must be application/json',415);
-    final raw=await req.readAsString();
-    if(raw.length>131072) throw DomainError('Body too large',413);
-    final decoded=jsonDecode(raw);
+    // Reject oversized requests while streaming, before buffering unbounded data.
+    final bytes=<int>[];
+    await for(final chunk in req.read()) {
+      if(bytes.length+chunk.length>131072) throw DomainError('Body too large',413);
+      bytes.addAll(chunk);
+    }
+    final decoded=jsonDecode(utf8.decode(bytes));
     if(decoded is! Map<String,dynamic>) throw DomainError('Expected a JSON object');
     return decoded;
   }
@@ -43,8 +48,15 @@ class KasherApi {
       final body=await _body(r);
       final tenant=body['tenant_id'],username=body['username'],password=body['password'];
       if(tenant is! String || username is! String || password is! String) throw DomainError('Missing credentials',400);
+      // In-process per-identity throttling. Still require TLS and durable auth controls for production.
+      final attemptKey=tenant.trim()+':'+username.trim();
+      final now=DateTime.now().toUtc();
+      final recent=_loginFailures.putIfAbsent(attemptKey,()=> <DateTime>[]);
+      recent.removeWhere((x)=>x.isBefore(now.subtract(const Duration(minutes:5))));
+      if(recent.length>=8) throw DomainError('Too many login attempts. Try later.',429);
       final result=auth.login(tenant,username,password);
-      if(result==null) throw DomainError('Invalid credentials',401);
+      if(result==null) {recent.add(now);throw DomainError('Invalid credentials',401);}
+      _loginFailures.remove(attemptKey);
       return _json(result);
     });
     router.post('/api/v1/auth/logout', (Request r) {

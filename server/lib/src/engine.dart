@@ -553,10 +553,17 @@ class PosEngine {
       final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
       if(qty>(originalLine['remaining'] as int)) throw DomainError('Returned quantity exceeds sold quantity',409);
       final origQty=originalLine['qty_milli'] as int;
+      final previouslyReturned=origQty-(originalLine['remaining'] as int);
       final origGross=lineAmount(originalLine['unit_price_minor'] as int,origQty);
-      final lineNet=prorate(origGross-(originalLine['discount_minor'] as int),qty,origQty);
-      final lineVat=prorate(originalLine['tax_minor'] as int,qty,origQty);
-      final lineCost=prorate(originalLine['cost_minor'] as int,qty,origQty);
+      final originalNet=origGross-(originalLine['discount_minor'] as int);
+      final lineNet=prorate(originalNet,previouslyReturned+qty,origQty)-
+        prorate(originalNet,previouslyReturned,origQty);
+      final originalVat=originalLine['tax_minor'] as int;
+      final lineVat=prorate(originalVat,previouslyReturned+qty,origQty)-
+        prorate(originalVat,previouslyReturned,origQty);
+      final originalCost=originalLine['cost_minor'] as int;
+      final lineCost=prorate(originalCost,previouslyReturned+qty,origQty)-
+        prorate(originalCost,previouslyReturned,origQty);
       lines.add({'original_line_id':lineId,'product_id':originalLine['product_id'],
         'qty':qty,'net':lineNet,'tax':lineVat,'cost':lineCost});
       net+=lineNet;tax+=lineVat;cogs+=lineCost;
@@ -591,6 +598,11 @@ class PosEngine {
     final doc0=_original(p,original,'purchase',branch);
     final warehouse=_warehouse(branch,input['warehouse_id'] ?? doc0['warehouse_id']);
     final supplier=doc0['party_id'] as String;
+    final refundMethod=input['refund_method'] ?? 'credit';
+    if(refundMethod!='credit' && refundMethod!='cash') throw DomainError('Unsupported supplier refund method');
+    if(refundMethod=='cash' && (doc0['paid_minor'] as int)<(doc0['total_minor'] as int)) {
+      throw DomainError('Cash refund requires a fully paid original purchase');
+    }
     final lines=<Map<String,dynamic>>[];
     final returnedLineIds=<String>{};
     var net=0,tax=0,stockCost=0;
@@ -602,8 +614,13 @@ class PosEngine {
       final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
       if(qty>(originalLine['remaining'] as int)) throw DomainError('Returned quantity exceeds purchased quantity',409);
       final origQty=originalLine['qty_milli'] as int;
-      final lineNet=prorate(originalLine['cost_minor'] as int,qty,origQty);
-      final lineVat=prorate(originalLine['tax_minor'] as int,qty,origQty);
+      final previouslyReturned=origQty-(originalLine['remaining'] as int);
+      final originalNet=originalLine['cost_minor'] as int;
+      final lineNet=prorate(originalNet,previouslyReturned+qty,origQty)-
+        prorate(originalNet,previouslyReturned,origQty);
+      final originalVat=originalLine['tax_minor'] as int;
+      final lineVat=prorate(originalVat,previouslyReturned+qty,origQty)-
+        prorate(originalVat,previouslyReturned,origQty);
       final removed=_stock(p,branch,warehouse,originalLine['product_id'] as String,-qty,0,'purchase_return',docId);
       lines.add({'original_line_id':lineId,'product_id':originalLine['product_id'],
         'qty':qty,'net':lineNet,'tax':lineVat,'cost':removed});
@@ -611,22 +628,28 @@ class PosEngine {
     }
     final total=net+tax;
     if(total<=0) throw DomainError('Empty supplier credit');
-    final doc=_documentWithId(docId,p,branch,warehouse,'purchase_return',supplier,net,0,tax,total,0,stockCost,
-      {'original_id':original,'lines':lines},original:original);
+    final doc=_documentWithId(docId,p,branch,warehouse,'purchase_return',supplier,net,0,tax,total,refundMethod=='cash'?total:0,stockCost,
+      {'original_id':original,'lines':lines,'refund_method':refundMethod},original:original);
     for(final line in lines) {
       _line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
         originalLine:line['original_line_id'] as String);
+    }
+    if(refundMethod=='cash') {
+      _savePayments(doc,branch,supplier,'in',[{'method':'cash','amount_minor':total}]);
     }
     final variance=net-stockCost;
     _post(p,branch,'purchase_return',doc,[
       LedgerLine('AP:$supplier',debit:total),LedgerLine('INVENTORY',credit:stockCost),
       LedgerLine('VAT_INPUT',credit:tax),
+      if(refundMethod=='cash') LedgerLine('CASH',debit:total),
+      if(refundMethod=='cash') LedgerLine('AP:$supplier',credit:total),
       if(variance>0) LedgerLine('PURCHASE_VARIANCE',credit:variance),
       if(variance<0) LedgerLine('PURCHASE_VARIANCE',debit:-variance)
     ]);
     _audit(p,'purchase.return',doc,{'original':original,'total_minor':total},branch);
     _outbox(branch,'purchase_return',{'id':doc,'original':original});
-    return {'id':doc,'supplier_credit_minor':total,'cost_variance_minor':variance};
+    return {'id':doc,'supplier_credit_minor':refundMethod=='cash'?0:total,
+      'cash_refund_minor':refundMethod=='cash'?total:0,'cost_variance_minor':variance};
   }
   String _documentWithId(String id,Principal p,String branch,String warehouse,String kind,String? party,
     int subtotal,int discount,int tax,int total,int paid,int cost,Map<String,dynamic> snapshot,{String? original}) {

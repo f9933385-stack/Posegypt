@@ -119,6 +119,31 @@ void main() {
     expect(engine.listStock(owner,branch).single['qty_milli'],2000);
   });
 
+  test('warehouse transfer is atomic and preserves weighted stock value', () {
+    final product=call('create_product',{'sku':'TRANSFER-1','name_ar':'رز','sell_price_minor':500});
+    final supplier=call('create_supplier',{'name':'مورد رز'});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':10000,'unit_cost_minor':100}],
+      'payments':<Map<String,dynamic>>[]});
+    final warehouse=call('create_warehouse',{'branch_id':branch,'name':'المخزن الخلفي'});
+    final initialValue=engine.dashboard(owner,branch)['stock_value_minor'];
+    final result=call('transfer_warehouse',{'branch_id':branch,
+      'source_warehouse_id':engine.listWarehouses(owner,branch).first['id'],
+      'destination_warehouse_id':warehouse['id'],
+      'product_id':product['id'],'qty_milli':4000});
+    expect(result['cost_minor'],400);
+    expect(engine.dashboard(owner,branch)['stock_value_minor'],initialValue);
+    final balances=engine.listStock(owner,branch);
+    expect(balances.fold<int>(0,(sum,row)=>sum+(row['qty_milli'] as int)),10000);
+    expect(balances.fold<int>(0,(sum,row)=>sum+(row['cost_minor'] as int)),1000);
+    final before=engine.listStock(owner,branch);
+    expect(()=>call('transfer_warehouse',{'branch_id':branch,
+      'source_warehouse_id':engine.listWarehouses(owner,branch).first['id'],
+      'destination_warehouse_id':warehouse['id'],
+      'product_id':product['id'],'qty_milli':999000}),throwsA(isA<DomainError>()));
+    expect(engine.listStock(owner,branch),before);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

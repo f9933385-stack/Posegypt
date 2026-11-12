@@ -106,6 +106,16 @@ class PosEngine {
           VALUES(?,?,?,?,?,?,?,?)''',[id,p.tenantId,branch,username,salt,pbkdf2(password,salt),role,_now()]);
         _audit(p,'user.create',id,{'username':username,'role':role,'branch_id':branch},branch);
         return {'id':id,'username':username,'role':role};
+      case 'create_warehouse':
+        _allow(p,['owner','manager']);
+        final branch=_branch(p,input['branch_id']);
+        final id=_id(), name=nonEmpty(input['name'],'name');
+        store.exec('INSERT INTO warehouses(id,branch_id,name,is_default) VALUES(?,?,?,0)',
+          [id,branch,name]);
+        _audit(p,'warehouse.create',id,{'name':name},branch);
+        _outbox(branch,'warehouse',{'id':id,'name':name});
+        return {'id':id,'name':name,'branch_id':branch};
+      case 'transfer_warehouse': return _transferWarehouse(p,input);
       case 'create_branch':
         _allow(p,['owner']);
         final id=_id(), wh=_id(),code=nonEmpty(input['code'],'code');
@@ -408,6 +418,29 @@ class PosEngine {
     return {'id':id,'cost_change_minor':qty>0?deltaCost:-deltaCost};
   }
 
+  /// Warehouse-to-warehouse transfer within ONE local branch database only.
+  /// Cross-branch transfers require a signed dispatch/receive cloud protocol.
+  Map<String,Object?> _transferWarehouse(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','stock']);
+    final branch=_branch(p,input['branch_id']);
+    final source=_warehouse(branch,input['source_warehouse_id']);
+    final destination=_warehouse(branch,input['destination_warehouse_id']);
+    if(source==destination) throw DomainError('Source and destination warehouses must differ');
+    final product=nonEmpty(input['product_id'],'product_id');
+    _product(p,product);
+    final qty=strictInt(input['qty_milli'],'qty_milli',min:1);
+    final id=_id();
+    final cost=_stock(p,branch,source,product,-qty,0,'warehouse_transfer_out',id);
+    _stock(p,branch,destination,product,qty,cost,'warehouse_transfer_in',id);
+    _audit(p,'warehouse.transfer',id,{'product_id':product,
+      'qty_milli':qty,'source_warehouse_id':source,
+      'destination_warehouse_id':destination,'cost_minor':cost},branch);
+    _outbox(branch,'warehouse_transfer',{'id':id,'product_id':product,
+      'source_warehouse_id':source,'destination_warehouse_id':destination,
+      'qty_milli':qty,'cost_minor':cost});
+    return {'id':id,'qty_milli':qty,'cost_minor':cost};
+  }
+
   Map<String,Object?> _prepare(Principal p,Map<String,dynamic> input) {
     _allow(p,['owner','manager','stock']);
     final branch=_branch(p,input['branch_id']),warehouse=_warehouse(branch,input['warehouse_id']);
@@ -625,6 +658,12 @@ class PosEngine {
     return result.map((r) => {...r,
       if(p.role=='owner' || p.role=='manager') 'balance_minor':
         _accountBalance('${customers?'AR':'AP'}:${r['id']}')*(customers?1:-1)}).toList();
+  }
+
+  List<Map<String,Object?>> listWarehouses(Principal p,String branchId) {
+    final branch=_branch(p,branchId);
+    return store.rows('SELECT id,branch_id,name,is_default FROM warehouses WHERE branch_id=? ORDER BY is_default DESC,name',
+      [branch]);
   }
 
   List<Map<String,Object?>> listBranches(Principal p) => store.rows(

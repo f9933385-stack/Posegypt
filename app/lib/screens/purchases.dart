@@ -5,6 +5,7 @@ import '../widgets/common.dart';
 
 class DraftPurchase {
   final Map<String,dynamic> product;
+  Map<String,dynamic>? selectedUnit;
   final TextEditingController qty=TextEditingController(text:'1');
   final TextEditingController cost=TextEditingController();
   final TextEditingController lotNo=TextEditingController();
@@ -27,6 +28,38 @@ class _PurchasesState extends State<PurchasesPage> {
   bool posting=false;
   @override void initState(){super.initState();suppliers=widget.api.list('suppliers');products=widget.api.list('products');}
   @override void dispose(){for(final x in lines){x.dispose();}payment.dispose();super.dispose();}
+  Future<void> _chooseUnit(DraftPurchase line) async {
+    try {
+      final units=await widget.api.list('units',{'product_id':line.product['id'].toString()});
+      if(!mounted)return;
+      final options=<Map<String,dynamic>?>[null,...units];
+      final result=await showDialog<int>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('اختر وحدة توريد: '+line.product['name_ar'].toString()),
+        content:SizedBox(width:480,child:ListView.builder(
+          shrinkWrap:true,itemCount:options.length,itemBuilder:(ctx,index){
+            final u=options[index];
+            return ListTile(
+              leading:Icon(u==null?Icons.inventory_2_outlined:Icons.all_inbox_outlined),
+              title:Text(u==null?'وحدة الأساس: '+line.product['base_unit'].toString()
+                :u['unit_name'].toString()),
+              subtitle:Text(u==null?'الكمية بوحدة الأساس':
+                'تساوي '+quantity(asInt(u['factor_milli']))+' من وحدة الأساس'),
+              onTap:()=>Navigator.pop(ctx,index));
+          })),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),
+          child:const Text('إلغاء'))],
+      ));
+      if(result==null || !mounted)return;
+      setState((){
+        line.selectedUnit=options[result];
+        line.qty.text='1';
+        line.cost.clear();
+      });
+    }catch(e){
+      if(mounted)alert(context,'تعذر تحميل وحدات الصنف: '+e.toString(),error:true);
+    }
+  }
+
   Future<void> _save() async {
     if(supplierId==null || lines.isEmpty) {alert(context,'اختر المورد والأصناف أولًا',error:true);return;}
     setState(()=>posting=true);
@@ -38,8 +71,16 @@ class _PurchasesState extends State<PurchasesPage> {
            item.expiresOn.text.trim().isEmpty)) {
           throw const FormatException('رقم التشغيلة وتاريخ الصلاحية مطلوبان');
         }
+        final alternate=item.selectedUnit;
+        final count=alternate==null?null:int.parse(item.qty.text.trim());
+        if(count!=null && (count<=0 || count>100000)) {
+          throw const FormatException('عدد الكراتين يجب أن يكون عددًا صحيحًا موجبًا');
+        }
         due.add({'product_id':item.product['id'],
-          'qty_milli':parseQty(item.qty.text),'unit_cost_minor':parseMoney(item.cost.text),
+          if(alternate==null)'qty_milli':parseQty(item.qty.text),
+          if(alternate!=null)'unit_id':alternate['id'],
+          if(alternate!=null)'unit_count':count,
+          'unit_cost_minor':parseMoney(item.cost.text),
           if(tracked)'lot_no':item.lotNo.text.trim(),
           if(tracked)'expires_on':item.expiresOn.text.trim()});
       }
@@ -75,11 +116,22 @@ class _PurchasesState extends State<PurchasesPage> {
       for(var i=0;i<lines.length;i++)Card(child:Padding(
         padding:const EdgeInsets.all(12),child:Column(children:[
         Row(children:[
-          Expanded(flex:3,child:Text(lines[i].product['name_ar'].toString())),
+          Expanded(flex:3,child:Column(
+            crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(lines[i].product['name_ar'].toString()),
+              TextButton.icon(onPressed:()=>_chooseUnit(lines[i]),
+                icon:const Icon(Icons.all_inbox_outlined,size:18),
+                label:Text(lines[i].selectedUnit?['unit_name']?.toString() ??
+                  'وحدة الأساس / اختر كرتونة')),
+            ])),
           const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].qty,
-            decoration:const InputDecoration(labelText:'كمية'))),
+            keyboardType:TextInputType.number,
+            decoration:InputDecoration(labelText:lines[i].selectedUnit==null
+              ?'كمية أساس':'عدد كراتين'))),
           const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].cost,
-            decoration:const InputDecoration(labelText:'تكلفة الوحدة (ج.م)'))),
+            keyboardType:TextInputType.number,
+            decoration:InputDecoration(labelText:lines[i].selectedUnit==null
+              ?'تكلفة وحدة الأساس (ج.م)':'تكلفة الكرتونة (ج.م)'))),
           IconButton(onPressed:(){setState(()=>lines.removeAt(i).dispose());},
             icon:const Icon(Icons.delete_outline)),
         ]),

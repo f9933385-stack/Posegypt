@@ -150,6 +150,9 @@ class PosEngine {
         _audit(p,'warehouse.create',id,{'name':name},branch);
         _outbox(branch,'warehouse',{'id':id,'name':name});
         return {'id':id,'name':name,'branch_id':branch};
+      case 'branch_shipment_dispatch': return _dispatchBranchShipment(p,input);
+      case 'branch_shipment_receive': return _receiveBranchShipment(p,input);
+      case 'branch_shipment_cancel': return _cancelBranchShipment(p,input);
       case 'transfer_warehouse': return _transferWarehouse(p,input);
       case 'create_branch':
         _allow(p,['owner']);
@@ -1054,6 +1057,190 @@ class PosEngine {
 
   /// Warehouse-to-warehouse transfer within ONE local branch database only.
   /// Cross-branch transfers require a signed dispatch/receive cloud protocol.
+
+  // This workflow moves stock between branches sharing ONE SQLite database.
+  // It does not claim reliability across independently hosted branch servers.
+  Map<String,Object?> _shipment(Principal p,String shipmentId) {
+    final result=store.first('''SELECT * FROM branch_shipments
+      WHERE id=? AND tenant_id=?''',[shipmentId,p.tenantId]);
+    if(result==null) throw DomainError('Shipment not found',404);
+    return result;
+  }
+
+  List<Map<String,Object?>> listBranchShipments(Principal p,String branchId) {
+    _allow(p,['owner','manager','stock']);
+    final branch=_branch(p,branchId);
+    return store.rows('''SELECT s.id,s.source_branch_id,s.destination_branch_id,
+      s.source_warehouse_id,s.destination_warehouse_id,s.product_id,
+      s.qty_milli,s.cost_minor,s.status,s.dispatched_at,s.received_at,
+      s.cancelled_at,s.dispatched_by,s.received_by,
+      pr.name_ar AS product_name,b1.name AS source_name,b2.name AS destination_name
+      FROM branch_shipments s JOIN products pr ON pr.id=s.product_id
+      JOIN branches b1 ON b1.id=s.source_branch_id
+      JOIN branches b2 ON b2.id=s.destination_branch_id
+      WHERE s.tenant_id=? AND (s.source_branch_id=? OR s.destination_branch_id=?)
+      ORDER BY s.dispatched_at DESC,s.id DESC LIMIT 200''',
+      [p.tenantId,branch,branch]);
+  }
+
+  Map<String,Object?> readBranchShipment(Principal p,String shipmentId) {
+    _allow(p,['owner','manager','stock']);
+    final shipment=_shipment(p,shipmentId);
+    final source=shipment['source_branch_id'] as String;
+    final dest=shipment['destination_branch_id'] as String;
+    if(!p.isOwner && p.branchId!=source && p.branchId!=dest) {
+      throw DomainError('Shipment belongs to another branch',403);
+    }
+    final lots=store.rows('''SELECT lot_no,expires_on,qty_milli
+      FROM branch_shipment_lots WHERE shipment_id=?
+      ORDER BY expires_on,lot_no''',[shipmentId]);
+    return {...shipment,'lots':lots};
+  }
+
+  Map<String,Object?> _dispatchBranchShipment(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final source=_branch(p,input['source_branch_id']);
+    final destination=nonEmpty(input['destination_branch_id'],'destination_branch_id');
+    if(source==destination) throw DomainError('Branch shipment must cross branches');
+    if(store.first('SELECT id FROM branches WHERE id=? AND tenant_id=?',
+      [destination,p.tenantId])==null) {
+      throw DomainError('Destination branch not found or forbidden',403);
+    }
+    final sourceWarehouse=_warehouse(source,input['source_warehouse_id']);
+    final destWarehouse=_warehouse(destination,input['destination_warehouse_id']);
+    final product=nonEmpty(input['product_id'],'product_id');
+    _product(p,product);
+    final qty=strictInt(input['qty_milli'],'qty_milli',min:1);
+    if(qty>1000000000000) throw DomainError('Shipment quantity exceeds safe limit');
+    final id=_id();
+    final cost=_stock(p,source,sourceWarehouse,product,-qty,0,'branch_dispatch',id);
+    if(_tracksLots(p,product)) {
+      final picked=_consumeFefo(sourceWarehouse,product,qty,'branch_dispatch',id);
+      for(final item in picked) {
+        store.exec('''INSERT INTO branch_shipment_lots
+          (id,shipment_id,lot_no,expires_on,qty_milli)
+          VALUES(?,?,?,?,?)''',
+          [_id(),id,item['lot_no'],item['expires_on'],item['qty_milli']]);
+      }
+      _assertLotMatchesStock(source,sourceWarehouse,product);
+    }
+    store.exec('''INSERT INTO branch_shipments
+      (id,tenant_id,source_branch_id,destination_branch_id,
+       source_warehouse_id,destination_warehouse_id,
+       product_id,qty_milli,cost_minor,status,dispatched_by,dispatched_at)
+      VALUES(?,?,?,?,?,?,?,?,?,'in_transit',?,?)''',
+      [id,p.tenantId,source,destination,sourceWarehouse,destWarehouse,
+        product,qty,cost,p.id,_now()]);
+    if(cost>0) {
+      _post(p,source,'branch_dispatch',id,
+        [LedgerLine('IN_TRANSIT',debit:cost),
+         LedgerLine('INVENTORY',credit:cost)]);
+    }
+    _audit(p,'branch_shipment.dispatched',id,
+      {'source_branch_id':source,'destination_branch_id':destination,
+       'product_id':product,'qty_milli':qty,'cost_minor':cost},source);
+    _outbox(source,'branch_shipment',{'id':id,'event':'dispatched',
+      'destination_branch_id':destination,'product_id':product});
+    _outbox(destination,'branch_shipment',{'id':id,'event':'incoming',
+      'source_branch_id':source,'product_id':product});
+    return {'id':id,'status':'in_transit','qty_milli':qty,'cost_minor':cost,
+      'source_branch_id':source,'destination_branch_id':destination};
+  }
+
+  Map<String,Object?> _receiveBranchShipment(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final id=nonEmpty(input['shipment_id'],'shipment_id');
+    final shipment=_shipment(p,id);
+    final destination=_branch(p,shipment['destination_branch_id']);
+    if(shipment['status']!='in_transit') {
+      throw DomainError('Shipment is already received or cancelled',409);
+    }
+    if(shipment['dispatched_by']==p.id) {
+      throw DomainError('Independent receiver required',403);
+    }
+    final product=shipment['product_id'] as String;
+    _product(p,product);
+    final warehouse=_warehouse(destination,shipment['destination_warehouse_id']);
+    final qty=shipment['qty_milli'] as int,cost=shipment['cost_minor'] as int;
+    if(_tracksLots(p,product)) {
+      final lotRows=store.rows('''SELECT lot_no,expires_on,qty_milli
+        FROM branch_shipment_lots WHERE shipment_id=?''',[id]);
+      final counted=lotRows.fold<int>(0,(sum,r)=>sum+(r['qty_milli'] as int));
+      if(lotRows.isEmpty || counted!=qty) {
+        throw DomainError('Shipment lot trace does not match dispatched quantity',409);
+      }
+    }
+    _stock(p,destination,warehouse,product,qty,cost,'branch_receive',id);
+    if(_tracksLots(p,product)) {
+      for(final row in store.rows('''SELECT lot_no,expires_on,qty_milli
+        FROM branch_shipment_lots WHERE shipment_id=?''',[id])) {
+        _receiveLot(warehouse,product,row['lot_no'] as String,
+          row['expires_on'] as String,row['qty_milli'] as int,'branch_receive',id);
+      }
+      _assertLotMatchesStock(destination,warehouse,product);
+    }
+    store.exec('''UPDATE branch_shipments SET status='received',
+      received_by=?,received_at=? WHERE id=?''',[p.id,_now(),id]);
+    if(cost>0) {
+      _post(p,destination,'branch_receive',id,
+        [LedgerLine('INVENTORY',debit:cost),
+         LedgerLine('IN_TRANSIT',credit:cost)]);
+    }
+    _audit(p,'branch_shipment.received',id,
+      {'qty_milli':qty,'cost_minor':cost,
+       'source_branch_id':shipment['source_branch_id']},destination);
+    _outbox(destination,'branch_shipment',{'id':id,'event':'received',
+      'source_branch_id':shipment['source_branch_id']});
+    _outbox(shipment['source_branch_id'] as String,'branch_shipment',
+      {'id':id,'event':'delivery_confirmed','destination_branch_id':destination});
+    return {'id':id,'status':'received','qty_milli':qty,'cost_minor':cost};
+  }
+
+  Map<String,Object?> _cancelBranchShipment(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final id=nonEmpty(input['shipment_id'],'shipment_id');
+    final reason=nonEmpty(input['reason'],'reason');
+    final shipment=_shipment(p,id);
+    final source=_branch(p,shipment['source_branch_id']);
+    if(shipment['status']!='in_transit') {
+      throw DomainError('Only in-transit shipments may be cancelled',409);
+    }
+    final warehouse=_warehouse(source,shipment['source_warehouse_id']);
+    final product=shipment['product_id'] as String;
+    _product(p,product);
+    final qty=shipment['qty_milli'] as int,cost=shipment['cost_minor'] as int;
+    if(_tracksLots(p,product)) {
+      final rows=store.rows('''SELECT lot_no,expires_on,qty_milli
+        FROM branch_shipment_lots WHERE shipment_id=?''',[id]);
+      final counted=rows.fold<int>(0,(sum,r)=>sum+(r['qty_milli'] as int));
+      if(rows.isEmpty || counted!=qty) {
+        throw DomainError('Cannot cancel shipment with inconsistent lot trace',409);
+      }
+    }
+    _stock(p,source,warehouse,product,qty,cost,'branch_dispatch_cancel',id);
+    if(_tracksLots(p,product)) {
+      for(final row in store.rows('''SELECT lot_no,expires_on,qty_milli
+        FROM branch_shipment_lots WHERE shipment_id=?''',[id])) {
+        _receiveLot(warehouse,product,row['lot_no'] as String,
+          row['expires_on'] as String,row['qty_milli'] as int,'branch_dispatch_cancel',id);
+      }
+      _assertLotMatchesStock(source,warehouse,product);
+    }
+    store.exec('''UPDATE branch_shipments SET status='cancelled',
+      cancelled_by=?,cancelled_at=?,cancellation_reason=? WHERE id=?''',
+      [p.id,_now(),reason,id]);
+    if(cost>0) {
+      _post(p,source,'branch_dispatch_cancel',id,
+        [LedgerLine('INVENTORY',debit:cost),
+         LedgerLine('IN_TRANSIT',credit:cost)]);
+    }
+    _audit(p,'branch_shipment.cancelled',id,{'reason':reason},source);
+    _outbox(source,'branch_shipment',{'id':id,'event':'cancelled'});
+    _outbox(shipment['destination_branch_id'] as String,'branch_shipment',
+      {'id':id,'event':'cancelled'});
+    return {'id':id,'status':'cancelled','qty_milli':qty,'cost_minor':cost};
+  }
+
   Map<String,Object?> _transferWarehouse(Principal p,Map<String,dynamic> input) {
     _allow(p,['owner','manager','stock']);
     final branch=_branch(p,input['branch_id']);

@@ -5,11 +5,16 @@ import '../widgets/common.dart';
 
 class CartLine {
   final Map<String,dynamic> product;
+  final Map<String,dynamic>? unit;
   int qtyMilli;
-  CartLine(this.product,{this.qtyMilli=1000});
-  int get price=>asInt(product['sell_price_minor']);
-  int get net=>(price*qtyMilli+500)~/1000;
+  int unitCount;
+  CartLine(this.product,{this.qtyMilli=1000,this.unit,this.unitCount=1});
+  int get price=>asInt(unit?['sell_price_minor'] ?? product['sell_price_minor']);
+  int get net=>unit==null ? (price*qtyMilli+500)~/1000 : price*unitCount;
   int get tax=>(net*asInt(product['tax_rate_bp'])+5000)~/10000;
+  Map<String,dynamic> toSaleLine()=>unit==null
+    ? {'product_id':product['id'],'qty_milli':qtyMilli}
+    : {'product_id':product['id'],'unit_id':unit!['id'],'unit_count':unitCount};
 }
 class PosPage extends StatefulWidget {
   final ApiClient api;
@@ -28,19 +33,55 @@ class _PosState extends State<PosPage> {
   @override void dispose(){for(final c in [search,cash,card,wallet,bank]){c.dispose();}super.dispose();}
   void _search(String q)=>setState(()=>products=widget.api.list('products',{'q':q}));
   void _add(Map<String,dynamic> p){setState(() {
-    final index=cart.indexWhere((x)=>x.product['id']==p['id']);
+    final index=cart.indexWhere((x)=>x.product['id']==p['id'] && x.unit==null);
     if(index<0)cart.add(CartLine(p));else cart[index].qtyMilli+=1000;
   });}
+  Future<void> _addUnit(Map<String,dynamic> product) async {
+    try {
+      final units=await widget.api.list('units',{'product_id':product['id'].toString()});
+      if(!mounted)return;
+      if(units.isEmpty){alert(context,'أضف وحدات البيع للصنف من شاشة المخزون أولًا',error:true);return;}
+      final unit=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('اختر وحدة بيع: '+product['name_ar'].toString()),
+        content:SizedBox(width:450,child:SingleChildScrollView(child:Column(
+          mainAxisSize:MainAxisSize.min,children:[
+            for(final entry in units)
+              ListTile(title:Text(entry['unit_name'].toString()),
+                subtitle:Text('تعادل '+quantity(asInt(entry['factor_milli']))+
+                  ' '+product['base_unit'].toString()),
+                trailing:Text(money(asInt(entry['sell_price_minor']))),
+                onTap:()=>Navigator.pop(ctx,entry)),
+          ]))),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء'))],
+      ));
+      if(unit==null || !mounted)return;
+      setState(() {
+        final index=cart.indexWhere((x)=>x.product['id']==product['id'] &&
+          x.unit?['id']==unit['id']);
+        if(index<0)cart.add(CartLine(product,unit:unit));
+        else cart[index].unitCount++;
+      });
+    }catch(e){if(mounted)alert(context,'تعذر تحميل وحدات الصنف: '+e.toString(),error:true);}
+  }
+
   int get total=>cart.fold<int>(0,(n,x)=>n+x.net+x.tax);
   Future<void> _changeQty(CartLine item) async {
-    final controller=TextEditingController(text:quantity(item.qtyMilli));
+    final controller=TextEditingController(text:item.unit==null
+      ?quantity(item.qtyMilli):item.unitCount.toString());
     final q=await showDialog<int>(context:context,builder:(ctx)=>AlertDialog(title:Text('${item.product['name_ar']}'),
       content:TextField(controller:controller,autofocus:true,keyboardType:const TextInputType.numberWithOptions(decimal:true),
-        decoration:const InputDecoration(labelText:'الكمية (مثال: 0.350)')),
+        decoration:InputDecoration(labelText:item.unit==null
+          ?'الكمية بوحدة الأساس (مثال: 0.350)':'عدد الوحدات الصحيحة')),
       actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
-        FilledButton(onPressed:(){try {final v=parseQty(controller.text);if(v<=0)throw const FormatException();Navigator.pop(ctx,v);}catch(_){alert(ctx,'كمية غير صالحة',error:true);}},child:const Text('حفظ'))]));
+        FilledButton(onPressed:(){try {
+          final v=item.unit==null?parseQty(controller.text):int.parse(controller.text);
+          if(v<=0 || (item.unit!=null && v>100000))throw const FormatException();
+          Navigator.pop(ctx,v);
+        }catch(_){alert(ctx,'كمية غير صالحة',error:true);}},child:const Text('حفظ'))]));
     controller.dispose();
-    if(q!=null && mounted)setState(()=>item.qtyMilli=q);
+    if(q!=null && mounted)setState((){
+      if(item.unit==null)item.qtyMilli=q;else item.unitCount=q;
+    });
   }
   Future<void> _submit() async {
     if(cart.isEmpty)return;
@@ -52,7 +93,7 @@ class _PosState extends State<PosPage> {
         if(text.isNotEmpty){final amount=parseMoney(text);if(amount>0)payments.add({'method':p.$1,'amount_minor':amount});}
       }
       final result=await widget.api.post('sales',{'branch_id':widget.branchId,
-        'customer_id':customerId,'lines':[for(final c in cart){'product_id':c.product['id'],'qty_milli':c.qtyMilli}],
+        'customer_id':customerId,'lines':[for(final c in cart)c.toSaleLine()],
         'payments':payments});
       if(!mounted)return;
       alert(context,'تم حفظ الفاتورة ${result['number']} — ${money(asInt(result['total_minor']))}');
@@ -69,9 +110,12 @@ class _PosState extends State<PosPage> {
         onRetry:()=>_search(search.text),builder:(list)=>list.isEmpty?const EmptyState('لا توجد أصناف مطابقة'):
         ListView.builder(itemCount:list.length,itemBuilder:(context,i){final p=list[i];return Card(child:ListTile(
           title:Text(p['name_ar']?.toString()??''),subtitle:Text('${p['sku']} • ${p['base_unit']}'),
-          trailing:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+          trailing:Row(mainAxisSize:MainAxisSize.min,children:[
             Text(money(asInt(p['sell_price_minor'])),style:const TextStyle(fontWeight:FontWeight.bold)),
-            const Icon(Icons.add_circle_outline,size:18)]),onTap:()=>_add(p)));}))),
+            IconButton(onPressed:()=>_addUnit(p),tooltip:'بيع بالكرتونة أو الوحدة',
+              icon:const Icon(Icons.all_inbox_outlined)),
+            IconButton(onPressed:()=>_add(p),tooltip:'إضافة بوحدة الأساس',
+              icon:const Icon(Icons.add_circle_outline))]),onTap:()=>_add(p)));}))),
     ]);
     final basket=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
       Row(children:[const Expanded(child:Text('الفاتورة الحالية',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold))),
@@ -80,7 +124,9 @@ class _PosState extends State<PosPage> {
       Expanded(child:cart.isEmpty?const EmptyState('اختر صنفًا أو امسح الباركود',icon:Icons.shopping_basket_outlined):
         ListView.builder(itemCount:cart.length,itemBuilder:(context,i){
           final c=cart[i];return Card(child:ListTile(dense:true,title:Text(c.product['name_ar'].toString()),
-            subtitle:Text('${quantity(c.qtyMilli)} × ${money(c.price)}'),
+            subtitle:Text(c.unit==null
+              ? quantity(c.qtyMilli)+' × '+money(c.price)
+              : c.unitCount.toString()+' × '+c.unit!['unit_name'].toString()+' × '+money(c.price)),
             trailing:Row(mainAxisSize:MainAxisSize.min,children:[Text(money(c.net+c.tax)),
               IconButton(onPressed:()=>_changeQty(c),icon:const Icon(Icons.edit_outlined)),
               IconButton(onPressed:()=>setState(()=>cart.removeAt(i)),icon:const Icon(Icons.close))])));})),

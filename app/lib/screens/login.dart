@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api.dart';
+import '../services/network_policy.dart';
 import 'shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -47,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
         const Text('إدارة سوبرماركت بسيطة ودقيقة',textAlign:TextAlign.center),
         const SizedBox(height:28),
         TextFormField(controller:host,textDirection:TextDirection.ltr,decoration:const InputDecoration(labelText:'عنوان خادم الفرع',prefixIcon:Icon(Icons.dns)),
-          validator:(s)=>Uri.tryParse(s ?? '')?.hasAuthority==true?null:'عنوان خادم غير صالح'),
+          validator:(s){try {validateBranchEndpoint(s ?? '');return null;} on FormatException catch(e){return e.message;}}),
         const SizedBox(height:12),
         TextFormField(controller:tenant,textDirection:TextDirection.ltr,decoration:const InputDecoration(labelText:'معرف المنشأة Tenant ID',prefixIcon:Icon(Icons.store)),
           validator:(s)=>(s??'').isEmpty?'مطلوب':null),

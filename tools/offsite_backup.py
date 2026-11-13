@@ -66,8 +66,9 @@ def mirror_verified_backup(source: Path, offsite: Path, password: str, *,
         raise ValueError("Encrypted input, offsite destination and local scratch must be separate")
     if offsite in scratch.parents or scratch in offsite.parents:
         raise ValueError("Local scratch may not be nested in the offsite folder")
-    if offsite in source.parents or source in offsite.parents:
-        raise ValueError("Offsite must not contain the source encrypted file")
+    if (offsite in source.parents or source.parent in offsite.parents
+            or offsite == source.parent):
+        raise ValueError("Offsite must be outside the source backup directory tree")
     _ensure_private_directory(offsite)
     _ensure_private_directory(scratch)
     target = offsite / source.name

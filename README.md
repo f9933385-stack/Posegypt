@@ -152,3 +152,8 @@ Owners/managers can configure nonoverlapping UTC time-window sale prices per bas
 ### Shared-database inter-branch shipments (schema v8)
 
 The Arabic inter-branch shipments screen supports a two-phase dispatch and independent receipt, WAC in-transit ledger, lot identity preservation, and cancellation before receipt. This works **only when both branches share the same SQLite server**; offline cross-host replication remains a release blocker. See [Arabic guide](docs/BRANCH_SHIPMENTS_AR.md).
+
+
+### Verified secondary encrypted backup storage
+
+One-shot `tools/scheduled_backup.py` can optionally run `--offsite-directory <protected-share> --scratch <trusted-local-directory>` before deleting any old local copies. The offsite copy is promoted only after an independent authenticated restore and accounting audit on the trusted host. It does not set up Google Drive OAuth, secure scheduling, physical offsite storage or a tested disaster-recovery plan. See [Arabic offsite backup guide](docs/BACKUP_OFFSITE_AR.md).

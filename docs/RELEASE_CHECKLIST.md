@@ -11,7 +11,7 @@ All unchecked items block a commercial production claim.
 - [ ] Expiry/batch policy, unit conversions, promos and safe returns implemented and approved.
 - [ ] TLS, pair/revoke devices, login rate limit, RBAC scope and security assessment complete.
 - [ ] Central branch sync, multi-branch stock transfer with in-transit workflow and replay tests complete.
-- [ ] Encrypted local + Google Drive backups and documented restore drill complete.
+- [ ] Verified encrypted local + separately provisioned offsite backup with monitored scheduling, vault-managed key, and independently documented cross-machine restore drill complete.
 - [ ] Device license signature + expiry read-only API enforcement and time rollback tests complete.
 - [ ] Printer, barcode labels and scale integrations verified on selected hardware models.
 - [ ] Egyptian legal/tax compliance reviewed against current official requirements.

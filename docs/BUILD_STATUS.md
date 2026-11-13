@@ -97,3 +97,10 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Tracked goods preserve FEFO lots and expiry; auditor checks movement and transit-value consistency.
 - **Not cloud sync:** this works on one shared SQLite host only. Separate machines, unreliable WAN, partial receipts, damage claims, signature capture, and network conflict resolution are still missing.
 - [Arabic shipping guide](BRANCH_SHIPMENTS_AR.md).
+
+
+## Verified secondary encrypted backups (operator tooling)
+- Added one-shot encrypted mirroring to a second protected folder/UNC path, authenticated restore and database audit from a **local scratch directory** before finalizing the mirror.
+- Lock prevents concurrent mirror writes, SHA-256 catches transfer corruption, and retention runs only after verified offsite copy. Optional `--offsite-directory` integrates this before local retention in `scheduled_backup.py`.
+- Added regression tests for remote corruption/failure, wrong password, lock ownership, restoration, retention and safe backup failure behavior.
+- **Not done:** provisioned offsite hardware/ACLs, automatic vault-backed scheduling and alerts, actual cross-machine recovery drill, cloud OAuth, ransomware-immutable remote storage. See [Arabic instructions](BACKUP_OFFSITE_AR.md).

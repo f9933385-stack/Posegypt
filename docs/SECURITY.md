@@ -54,3 +54,10 @@ Consult [`PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for the compl
 - Initial provisioning must be done from the local loopback server; an enrolled administrator can issue further tickets over trusted HTTPS.
 - Android APK build disables auto-backup and plaintext traffic in the generated main Android manifest; repeat controls on official production manifests.
 - **Limitations:** this is credential-based pairing, not hardware-backed device attestation or mTLS. Stolen bearer tokens remain usable before detection until their session is revoked/expired. See [Device pairing guide](DEVICE_PAIRING_AR.md).
+
+
+## Verified secondary encrypted backup path
+
+`tools/offsite_backup.py` supports mirroring a valid named AES-GCM `.kasherbak` file to a second protected storage directory or Windows UNC share. It copies **encrypted bytes only**, verifies the SHA-256 hash and then decrypts a temporary verification copy on a distinct trusted **local scratch** directory. It performs the accounting/inventory audit before promoting the remote file to its final name or pruning old remote backups. A dedicated remote lock prevents concurrent writers. A failed mirror does not delete existing verified copies or prune local retained backups. `tools/scheduled_backup.py --offsite-directory ... --scratch ...` can invoke this in the same one-shot run **before local retention**.
+
+This is not a cloud sync service and does not prove the target is physically off site. Restrict Windows share/NTFS ACLs manually and monitor failed scheduled jobs; no automatic Task Scheduler registration, immutable object lock or Google Drive OAuth is provided. See [Arabic offsite backup runbook](BACKUP_OFFSITE_AR.md).

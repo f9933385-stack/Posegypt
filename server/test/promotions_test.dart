@@ -107,6 +107,28 @@ void main() {
       'payments':[{'method':'cash','amount_minor':200}]})['total_minor'],200);
   });
 
+  test('stale checkout total fails atomically after an offer expires or stops',() {
+    final p=item('PROMO-STALE');
+    final prom=offer(p['id'],price:125);
+    // Cashier reviews 125 piasters while this promotion is active.
+    expect(engine.listProducts(cashier,search:'PROMO-STALE')
+      .single['effective_sell_price_minor'],125);
+    act(owner,'stop_promotion',{'promotion_id':prom['id'],'reason':'الانتهاء'});
+    expect(()=>act(cashier,'sale',{'branch_id':branch,
+      'lines':[{'product_id':p['id'],'qty_milli':1000}],
+      'expected_total_minor':125,
+      'payments':[{'method':'cash','amount_minor':125}]}),
+      throwsA(isA<DomainError>()));
+    expect(db.rows("SELECT id FROM documents WHERE kind='sale'"),isEmpty);
+    expect(engine.listStock(owner,branch).single['qty_milli'],10000);
+    final accepted=act(cashier,'sale',{'branch_id':branch,
+      'lines':[{'product_id':p['id'],'qty_milli':1000}],
+      'expected_total_minor':200,
+      'payments':[{'method':'cash','amount_minor':200}]});
+    expect(accepted['total_minor'],200);
+    expect(engine.listStock(owner,branch).single['qty_milli'],9000);
+  });
+
   test('wrong tenant promotion and invalid time formats fail closed',() {
     final p=item('PROMO-VALIDATE');
     expect(()=>offer(p['id'],price:200),throwsA(isA<DomainError>()));

@@ -305,3 +305,42 @@ const schemaV7 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_promotions_lookup
     ON price_promotions(tenant_id,product_id,unit_id,active,starts_at,ends_at)'''
 ];
+
+
+/// V8: local single-database, two-phase inter-branch stock dispatch and receipt.
+/// Transit is a separate financial asset; destination stock changes on receipt.
+const schemaV8 = <String>[
+  '''CREATE TABLE IF NOT EXISTS branch_shipments (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    source_branch_id TEXT NOT NULL REFERENCES branches(id),
+    destination_branch_id TEXT NOT NULL REFERENCES branches(id),
+    source_warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+    destination_warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+    product_id TEXT NOT NULL REFERENCES products(id),
+    qty_milli INTEGER NOT NULL CHECK(qty_milli>0),
+    cost_minor INTEGER NOT NULL CHECK(cost_minor>=0),
+    status TEXT NOT NULL CHECK(status IN ('in_transit','received','cancelled')),
+    dispatched_by TEXT NOT NULL REFERENCES users(id),
+    dispatched_at TEXT NOT NULL,
+    received_by TEXT REFERENCES users(id),
+    received_at TEXT,
+    cancelled_by TEXT REFERENCES users(id),
+    cancelled_at TEXT,
+    cancellation_reason TEXT,
+    CHECK(source_branch_id<>destination_branch_id)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_branch_shipments_source
+     ON branch_shipments(tenant_id,source_branch_id,status,dispatched_at)''',
+  '''CREATE INDEX IF NOT EXISTS ix_branch_shipments_destination
+     ON branch_shipments(tenant_id,destination_branch_id,status,dispatched_at)''',
+  '''CREATE TABLE IF NOT EXISTS branch_shipment_lots (
+    id TEXT PRIMARY KEY,
+    shipment_id TEXT NOT NULL REFERENCES branch_shipments(id),
+    lot_no TEXT NOT NULL,
+    expires_on TEXT NOT NULL,
+    qty_milli INTEGER NOT NULL CHECK(qty_milli>0)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_branch_shipment_lots_shipment
+     ON branch_shipment_lots(shipment_id)'''
+];

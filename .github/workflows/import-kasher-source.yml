@@ -70,6 +70,8 @@ jobs:
       - name: Generate Android native scaffold
         working-directory: app
         run: flutter create --project-name kasher_app --platforms=android .
+      - name: Harden Android manifest for device secrets
+        run: python3 tools/secure_android_manifest.py app/android/app/src/main/AndroidManifest.xml
       - name: Build Android development APK
         working-directory: app
         run: flutter build apk --debug

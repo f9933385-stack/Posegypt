@@ -203,3 +203,11 @@ const schemaV3 = <String>[
     BEFORE UPDATE OF qty_milli ON batches WHEN NEW.qty_milli < 0
     BEGIN SELECT RAISE(ABORT,'Batch quantity must not be negative'); END''',
 ];
+
+///// V4: reversible lot quarantine (never changes stock quantities).
+const schemaV4 = <String>[
+  '''ALTER TABLE batches ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0
+     CHECK(quarantined IN (0,1))''',
+  '''ALTER TABLE batches ADD COLUMN quarantine_reason TEXT''',
+  '''ALTER TABLE batches ADD COLUMN quarantine_updated_at TEXT''',
+];

@@ -91,7 +91,7 @@ class KasherApi {
     final commands={
       'users':'create_user','products':'create_product','units':'create_product_unit','customers':'create_customer','suppliers':'create_supplier',
       'branches':'create_branch','warehouses':'create_warehouse',
-      'inventory/transfers':'transfer_warehouse','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
+      'inventory/transfers':'transfer_warehouse','lots/quarantine':'set_lot_quarantine','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
       'purchases/returns':'purchase_return','customers/receipts':'customer_receipt',
       'suppliers/payments':'supplier_payment','expenses':'expense',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',

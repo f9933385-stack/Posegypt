@@ -143,3 +143,7 @@ The branch now uses per-device credentials, owner/manager-issued one-time 10-min
 ### Carton purchases and goods receiving
 
 Purchase invoices may now receive configured product units (box/carton) by integer `unit_count` with independent exact `unit_cost_minor` per carton; quantities convert to base-stock thousandths. Paid invoices, supplier payables, expiry-lot intake and partial supplier returns remain transactionally audited. The Arabic Flutter purchases screen exposes unit selection. See [API purchase-by-carton semantics](docs/API.md#purchase-by-carton--alternate-unit).
+
+### Scheduled promotional prices (development schema v7)
+
+Owners/managers can configure nonoverlapping UTC time-window sale prices per base product or carton. The Dart server enforces final price at posting, and Flutter displays the effective price. See [Arabic promotions guide](docs/PROMOTIONS_AR.md). Coupons, conditional campaigns, per-branch pricing and customer-facing price re-confirmation are still excluded.

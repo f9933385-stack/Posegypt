@@ -158,3 +158,10 @@ Example:
 ```
 
 Returns still specify **base-unit** `qty_milli` against an immutable original purchase line, preserving cumulative fractional-piaster rounding on partial returns. The feature does not yet support purchase-order approvals or supplier EDI.
+
+## Promotional prices (schema v7)
+
+`GET /api/v1/promotions?product_id=...` lists offers.
+`POST /api/v1/promotions` accepts `product_id`, optional `unit_id`, `title`, integer `promo_price_minor`, and `starts_at`/`ends_at` UTC timestamps (YYYY-MM-DDTHH:MM:SSZ). Owner/manager only; promotions may not overlap for the same product and unit. `POST /api/v1/promotions/stop` accepts `promotion_id` and `reason`.
+
+Product and unit lookup responses include `effective_sell_price_minor` and `promotion_id` alongside original `sell_price_minor`. The sale endpoint always determines the current effective price server-side at posting time; a cashier cannot override it. Original receipt line amount is immutable for returns. See [Arabic price guide](PROMOTIONS_AR.md).

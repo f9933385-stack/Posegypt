@@ -80,3 +80,10 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Existing discounts, payment methods, supplier payable, FEFO receipt and partial purchase returns remain on the same SQL transaction and integer-piaster ledger.
 - Flutter purchasing now lets the user switch between base units and configured cartons/boxes, with different quantity/cost labels.
 - **Still requires:** commercial device/batch receipt pilot, supplier order approvals, unit-scale conversion policy and verified refund rules.
+
+## Price promotions milestone (schema v7)
+- Owner/manager can schedule lower fixed prices for base items or cartons independently.
+- Overlap prevention, UTC time validation, role restriction, audit trail, immediate cancellation and server-authoritative POS pricing.
+- Flutter inventory UI can create and stop offers; POS shows active effective price.
+- **Still missing:** coupons, multibuy, per-branch pricing, loyalty, price lock/review before cash tender, business sign-off and end-device tests.
+- [Arabic promotions guide](PROMOTIONS_AR.md).

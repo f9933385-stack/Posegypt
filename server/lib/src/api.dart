@@ -3,19 +3,23 @@ import 'dart:convert';
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 import 'engine.dart';
+import 'devices.dart';
 import 'security.dart';
 
 class KasherApi {
   final PosEngine engine;
   final AuthService auth;
-  KasherApi(this.engine,this.auth);
+  final bool enforceDevices;
+  final DeviceRegistry devices;
+  KasherApi(this.engine,this.auth,{this.enforceDevices=false})
+    : devices=DeviceRegistry(auth.store);
   final Map<String,List<DateTime>> _loginFailures={};
 
   Response _json(Object? value,{int status=200}) => Response(status,body:jsonEncode(value),
     headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',
       'x-content-type-options':'nosniff'});
   Principal _p(Request r) {
-    final p=auth.authenticate(r.headers['authorization']);
+    final p=auth.authenticate(r.headers['authorization'],requireDevice:enforceDevices);
     if(p==null) throw DomainError('Unauthorized',401);
     return p;
   }
@@ -54,7 +58,12 @@ class KasherApi {
       final recent=_loginFailures.putIfAbsent(attemptKey,()=> <DateTime>[]);
       recent.removeWhere((x)=>x.isBefore(now.subtract(const Duration(minutes:5))));
       if(recent.length>=8) throw DomainError('Too many login attempts. Try later.',429);
-      final result=auth.login(tenant,username,password);
+      final deviceId=body['device_id'],deviceSecret=body['device_secret'];
+      if(deviceId!=null && deviceId is! String) throw DomainError('Invalid device credentials',400);
+      if(deviceSecret!=null && deviceSecret is! String) throw DomainError('Invalid device credentials',400);
+      final result=auth.login(tenant,username,password,
+        deviceId:deviceId as String?,deviceSecret:deviceSecret as String?,
+        requireDevice:enforceDevices);
       if(result==null) {recent.add(now);throw DomainError('Invalid credentials',401);}
       _loginFailures.remove(attemptKey);
       return _json(result);
@@ -64,6 +73,29 @@ class KasherApi {
       final token=r.headers['authorization']!.substring(7);
       auth.logout(token);
       return _json({'ok':true});
+    });
+    router.post('/api/v1/devices/claim',(Request r) async {
+      final body=await _body(r);
+      if(body['pairing_code'] is! String || body['device_name'] is! String) {
+        throw DomainError('Pairing code and device name required',400);
+      }
+      return _json(devices.claim(body['pairing_code'] as String,
+        body['device_name'] as String),status:201);
+    });
+    router.get('/api/v1/devices',(Request r)=>
+      _json(devices.list(_p(r),_branch(r))));
+    router.post('/api/v1/devices/pairings',(Request r) async {
+      final actor=_p(r),body=await _body(r);
+      if(body['branch_id'] is! String) throw DomainError('branch_id required',400);
+      return _json(devices.issue(actor,body['branch_id'] as String),status:201);
+    });
+    router.post('/api/v1/devices/revoke',(Request r) async {
+      final actor=_p(r),body=await _body(r);
+      if(body['device_id'] is! String || body['reason'] is! String) {
+        throw DomainError('device_id and reason required',400);
+      }
+      return _json(devices.revoke(actor,body['device_id'] as String,
+        body['reason'] as String),status:201);
     });
     router.get('/api/v1/me', (Request r) {
       final p=_p(r);

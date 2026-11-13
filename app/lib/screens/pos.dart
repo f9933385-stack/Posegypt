@@ -125,7 +125,7 @@ class _PosState extends State<PosPage> {
       }
       final result=await widget.api.post('sales',{'branch_id':widget.branchId,
         'customer_id':customerId,'lines':[for(final c in cart)c.toSaleLine()],
-        'payments':payments});
+        'expected_total_minor':total,'payments':payments});
       if(!mounted)return;
       alert(context,'تم حفظ الفاتورة ${result['number']} — ${money(asInt(result['total_minor']))}');
       setState(() {cart.clear();for(final c in [cash,card,wallet,bank]){c.clear();} customerId=null;});

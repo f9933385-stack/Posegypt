@@ -2,7 +2,7 @@
 
 This is **not yet an internet-facing or production-ready financial service**.
 
-1. **Network:** default bind 127.0.0.1. HTTP is now allowed only on loopback; the Dart server requires both a TLS certificate and private key for every non-loopback bind address, and Flutter rejects remote HTTP before sending credentials. OS certificate/hostname trust remains mandatory. Device pairing, revocation, automatic certificate rotation, and penetration testing remain incomplete. Never expose the service publicly; see [Arabic HTTPS guide](HTTPS_LAN_AR.md).
+1. **Network:** default bind 127.0.0.1. HTTP is now allowed only on loopback; the Dart server requires both a TLS certificate and private key for every non-loopback bind address, and Flutter rejects remote HTTP before sending credentials. OS certificate/hostname trust remains mandatory. Initial device pairing and session revocation are now implemented with single-use tickets and OS-protected client secrets; hardware attestation, mTLS, automated credential rotation, certificate lifecycle management and penetration testing remain incomplete. Never expose the service publicly; see [Arabic HTTPS guide](HTTPS_LAN_AR.md).
 2. **Credentials:** set `KASHER_ADMIN_PASSWORD` during first-time bootstrap. No default password and no credentials are stored in the repository. Passwords are PBKDF2-HMAC-SHA256 with random salt; vetted Argon2id upgrade is an optional later enhancement. Session tokens are cryptographically random and stored only as SHA-256 hashes server-side. No token is persisted in Flutter SharedPreferences.
 3. **Authorization:** server validates roles, tenant, branch per action. Cost fields are redacted for cashier/viewer. Formal granular RBAC with explicit permission entries, creation and management of users, and audit of denied attempts remain unfinished.
 4. **Database:** SQLite foreign keys and WAL are enabled. Writes are synchronous `BEGIN IMMEDIATE` transactions; stock has no-negative-quantity constraint. Database file must remain private to Windows host, backed up safely; never mount to multiple clients over SMB. No encrypted-at-rest policy shipped.
@@ -46,3 +46,11 @@ passing audit only checks selected database invariants, not business or
 regulatory correctness.
 
 Consult [`PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for the complete Arabic backup and restore runbook. Backups are not offsite until they are separately and securely transferred; cloud upload is not implemented.
+
+## Device enrollment v6
+- Owner/manager issues a single-use 10-minute pairing code; only its SHA-256 hash is persisted.
+- Device claims receive a high-entropy one-time secret; the server stores its hash and Flutter keeps the secret in Windows/Android OS secure storage, never in SharedPreferences.
+- Remote service login requires both an enrolled active device credential and staff credentials; authenticated sessions are bound to the device and rejected/revoked when it is deactivated.
+- Initial provisioning must be done from the local loopback server; an enrolled administrator can issue further tickets over trusted HTTPS.
+- Android APK build disables auto-backup and plaintext traffic in the generated main Android manifest; repeat controls on official production manifests.
+- **Limitations:** this is credential-based pairing, not hardware-backed device attestation or mTLS. Stolen bearer tokens remain usable before detection until their session is revoked/expired. See [Device pairing guide](DEVICE_PAIRING_AR.md).

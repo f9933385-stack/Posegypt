@@ -36,7 +36,7 @@
 |---|---|---|
 | GET | /api/v1/devices?branch_id=... | قائمة الأجهزة دون أسرار؛ للمالك/المدير |
 | POST | /api/v1/devices/pairings | إصدار رمز مؤقت؛ يحتاج Bearer للمالك/المدير وbranch_id |
-| POST | /api/v1/devices/claim | استبدال رمز الاقتران بـdevice_id وdevice_secret؛ لمرة واحدة |
+| POST | /api/v1/devices/claim | يستقبل pairing_code وdevice_name وtenant_id، ثم يُصدر device_id وdevice_secret لمرة واحدة |
 | POST | /api/v1/devices/revoke | إلغاء جهاز مع reason؛ للمالك/المدير |
 | POST | /api/v1/auth/login | يطلب device_id وdevice_secret إضافة إلى حساب الموظف عند تشغيل LAN |
 

@@ -131,3 +131,16 @@ remain immutable records.
 | `POST /api/v1/counts/cancel` | `count_id`, `reason` (owner/manager) |
 
 More detail: [Arabic stocktake guide](STOCKTAKE_AR.md).
+
+## Enrolled branch devices (schema v6)
+
+In non-loopback HTTPS mode, `/api/v1/auth/login` requires `device_id` and `device_secret` as well as tenant/username/password. The LAN API also rejects bearer sessions that have no enrolled active device binding. Revoking a device deletes its sessions immediately.
+
+| Route | Access | Payload |
+|---|---|---|
+| `GET /api/v1/devices?branch_id=...` | owner/manager | Device status, **never** secret hash |
+| `POST /api/v1/devices/pairings` | owner/manager | `branch_id`, returns one-time pairing_code valid 10 minutes |
+| `POST /api/v1/devices/claim` | anonymous pairing ticket | `pairing_code`, `device_name`, `tenant_id`; returns device ID + one-time secret |
+| `POST /api/v1/devices/revoke` | owner/manager | `device_id`, `reason`; revokes sessions |
+
+Initial pairing on the same server uses the local loopback-only mode; production remote operation requires HTTPS and enrollment. See [Arabic pairing guide](DEVICE_PAIRING_AR.md).

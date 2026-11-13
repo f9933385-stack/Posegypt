@@ -20,7 +20,7 @@ contains `start_windows.ps1` if the launch script is present in the source commi
 ## Critical exclusions before production
 The project is **not** ready for a real supermarket, despite green builds.
 Remaining blockers include branch-to-cloud sync and conflict reconciliation;
-separate-branch transfer dispatch and receipt; managed TLS certificate trust, device pairing/revocation and renewal for LAN devices;
+separate-branch transfer dispatch and receipt; managed TLS certificate trust, device attestation, credential rotation and hardware-backed renewal for LAN devices;
 fully reconciled shifts and role overrides; lot-aware preparation/recalls and purchase-side unit conversion;
 price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
 backup automation and full disaster-recovery drills; tested thermal and label printers and
@@ -67,3 +67,10 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - TLS tests use an ephemeral local test certificate with a real Shelf HTTPS listener when OpenSSL is available.
 - Still missing: per-device pairing, revocation, managed certificate lifecycle and field security validation.
 - [Arabic trusted HTTPS guide](HTTPS_LAN_AR.md).
+
+## Device pairing v6 milestone
+- One-time 10-minute admin-generated pairing codes, hash-only storage, one-time secret claim.
+- Persistent encrypted device credentials via flutter_secure_storage (Windows/Android), server-bound sessions and immediate revocation.
+- LAN mode requires device and employee credentials; loopback retains explicitly local initial enrollment.
+- Hardened Android manifest auto-backup and cleartext settings in CI.
+- Device pairing is NOT a substitute for managed MDM, hardware attestation, mTLS, intrusion monitoring or complete security review. [Arabic enrollment guide](DEVICE_PAIRING_AR.md).

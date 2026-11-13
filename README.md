@@ -134,4 +134,8 @@ requiring a new count. See [Arabic stocktake guide](docs/STOCKTAKE_AR.md).
 
 ### HTTPS-only remote branch connections
 
-The Dart server refuses non-loopback HTTP and requires --tls-cert / --tls-key for LAN listening. Flutter rejects plaintext remote server URLs before authentication. See [Arabic trusted HTTPS setup](docs/HTTPS_LAN_AR.md). Hardware pairing, revocation and production security assessments remain open.
+The Dart server refuses non-loopback HTTP and requires --tls-cert / --tls-key for LAN listening. Flutter rejects plaintext remote server URLs before authentication. See [Arabic trusted HTTPS setup](docs/HTTPS_LAN_AR.md). Basic one-time device pairing, active device sessions and revocation are implemented; hardware attestation, managed certificate lifecycle and production security assessment remain open.
+
+### Branch device enrollment (schema v6)
+
+The branch now uses per-device credentials, owner/manager-issued one-time 10-minute pairing tickets, Windows/Android OS-protected client secrets and revocable device-bound sessions in LAN mode. For first-branch registration and a real device revocation walkthrough, read the [Arabic device pairing guide](docs/DEVICE_PAIRING_AR.md). **Not** hardware device attestation or complete production authorization.

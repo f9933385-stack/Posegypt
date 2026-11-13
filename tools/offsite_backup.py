@@ -15,7 +15,6 @@ import argparse
 import hashlib
 import json
 import os
-import secrets
 import tempfile
 from pathlib import Path
 
@@ -75,11 +74,12 @@ def mirror_verified_backup(source: Path, offsite: Path, password: str, *,
     if target.exists() or target.is_symlink():
         raise FileExistsError("Encrypted backup already exists at offsite destination")
     lock_fd = None
+    owns_lock = False
     lock = offsite / LOCK
     partial: Path | None = None
-    promoted = False
     try:
         lock_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        owns_lock = True
         with os.fdopen(lock_fd, "w", encoding="utf-8") as handle:
             lock_fd = None
             handle.write("Kasher verified offsite backup in progress\n")
@@ -99,7 +99,8 @@ def mirror_verified_backup(source: Path, offsite: Path, password: str, *,
                 output.flush()
                 os.fsync(output.fileno())
             expected_hash = digest.hexdigest()
-            if total != source.stat().st_size or _sha256(partial) != expected_hash:
+            if (total != source.stat().st_size or _sha256(source) != expected_hash
+                    or _sha256(partial) != expected_hash):
                 raise ValueError("Encrypted mirror checksum did not match source")
             # Verification temp files stay on a trusted local encrypted volume.
             with tempfile.TemporaryDirectory(prefix="kasher-mirror-check-", dir=str(scratch)) as tmp:
@@ -108,7 +109,6 @@ def mirror_verified_backup(source: Path, offsite: Path, password: str, *,
             if target.exists() or target.is_symlink():
                 raise FileExistsError("Target appeared during verification; refusing overwrite")
             partial.replace(target)
-            promoted = True
             # Never prune older copies until the NEW copied version passes restore.
             pruned = _safe_prune(offsite, keep)
             return {"status": "verified-offsite-copy", "backup": target.name,
@@ -120,7 +120,7 @@ def mirror_verified_backup(source: Path, offsite: Path, password: str, *,
     finally:
         if lock_fd is not None:
             os.close(lock_fd)
-        if lock.exists():
+        if owns_lock:
             lock.unlink(missing_ok=True)
 
 

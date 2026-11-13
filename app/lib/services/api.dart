@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'network_policy.dart';
 import 'package:http/http.dart' as http;
 
 class ApiFailure implements Exception {
@@ -10,9 +11,9 @@ class ApiFailure implements Exception {
 }
 
 class ApiClient {
-  String baseUrl;
+  final String baseUrl;
   String? token;
-  ApiClient(this.baseUrl,{this.token});
+  ApiClient(String endpoint,{this.token}) : baseUrl=validateBranchEndpoint(endpoint);
   final Map<String,String> _pendingKeys={};
   Uri uri(String path,[Map<String,String>? params]) =>
     Uri.parse('${baseUrl.replaceAll(RegExp(r'/$'),'')}/api/v1/$path').replace(queryParameters:params);

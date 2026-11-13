@@ -21,7 +21,7 @@ contains `start_windows.ps1` if the launch script is present in the source commi
 The project is **not** ready for a real supermarket, despite green builds.
 Remaining blockers include branch-to-cloud sync and conflict reconciliation;
 separate-branch transfer dispatch and receipt; TLS/pairing for LAN devices;
-fully reconciled shifts and role overrides; expiry/lot and purchase-side unit conversion;
+fully reconciled shifts and role overrides; lot-aware preparation/recalls and purchase-side unit conversion;
 price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
 backup automation and full disaster-recovery drills; tested thermal and label printers and
 electronic scale models; Egyptian tax/e-invoice compliance; signed Android
@@ -37,3 +37,10 @@ The Android debug build needs an isolated test LAN setup with a reachable branch
 - POS supports alternate carton/box units with exact line gross, barcode lookup and cumulative return rounding.
 - Encrypted backup rotation runner: `python tools/scheduled_backup.py DATABASE PRIVATE_BACKUP_DIR --keep 14`. It verifies restore before retaining/pruning; **host scheduler, vault and offsite restore drill still required**.
 - Read [`docs/PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for Arabic operations and release restrictions.
+
+## Expiry-lot milestone (schema v3)
+- Purchases validate `lot_no` + `expires_on` for tracked products; tracked sale consumes FEFO unexpired lots transactionally.
+- Returns, supplier returns, same-branch warehouse transfers and batch-level stock adjustments preserve lot provenance.
+- A separate batch movement ledger is audited against tracked warehouse stock and includes original document-line references.
+- Expired stock cannot be sold, while returned expired stock stays outside FEFO sale availability.
+- **Not yet complete:** recalls, quarantine workflows, automatic expired-write-off with approvals, lot-aware preparation and fully verified stocktakes; refer to [expiry lot restrictions](EXPIRY_LOTS_AR.md).

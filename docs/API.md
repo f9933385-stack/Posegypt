@@ -24,6 +24,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/auth/login \
 | `GET /api/v1/units?product_id=...` | Listed active carton/alternate units for a product within the tenant |
 | `GET /api/v1/customers` | Tenant customers (outstanding balance for manager/owner) |
 | `GET /api/v1/suppliers` | Suppliers; restricted to owner/manager/purchasing |
+| `GET /api/v1/lots?branch_id=...&product_id=...` | Expiry-lot balances by branch, product, and optional warehouse; includes expired and sellable stock |
 | `GET /api/v1/stock?branch_id=...` | Quantity and value (cost hidden from cashier/viewer) |
 | `GET /api/v1/documents?branch_id=...` | Recent documents (cost hidden from cashier/viewer) |
 | `GET /api/v1/documents/<id>` | Immutable invoice, lines, recorded payments |
@@ -36,19 +37,19 @@ curl -X POST http://127.0.0.1:8787/api/v1/auth/login \
 | Route | Command fields |
 |---|---|
 | `POST /api/v1/users` | Owner only: `username`, `password`, `role`, `branch_id` |
-| `POST /api/v1/products` | `sku`, `name_ar`, `sell_price_minor`; optional `barcode`, `tax_rate_bp`, `base_unit` |
+| `POST /api/v1/products` | `sku`, `name_ar`, `sell_price_minor`; optional `barcode`, `tax_rate_bp`, `base_unit`, `track_expiry` (boolean) |
 | `POST /api/v1/units` | `product_id`, `unit_name`, `factor_milli`, `sell_price_minor`, optional `barcode`. Example: carton of 12 base units has `factor_milli=12000` |
 | `POST /api/v1/customers` | `name`, optional `phone`, `credit_limit_minor` |
 | `POST /api/v1/suppliers` | `name`, optional `phone` |
 | `POST /api/v1/branches` | Owner only: `name`, `code` |
-| `POST /api/v1/purchases` | `branch_id`, `supplier_id`, `lines` with `product_id`, `qty_milli`, `unit_cost_minor`; optional `payments` |
+| `POST /api/v1/purchases` | `branch_id`, `supplier_id`, `lines` with `product_id`, `qty_milli`, `unit_cost_minor`; tracked products additionally require `lot_no`, `expires_on` (YYYY-MM-DD); optional `payments` |
 | `POST /api/v1/sales` | `branch_id`, `lines`: either `product_id` + `qty_milli` OR `product_id` + `unit_id` + `unit_count`; optional `customer_id`, `payments` |
 | `POST /api/v1/sales/returns` | `branch_id`, `original_id`, `refund_method` (`cash`/`credit`), `lines` with `original_line_id`, `qty_milli` |
 | `POST /api/v1/purchases/returns` | `branch_id`, `original_id`, `lines` with `original_line_id`, `qty_milli` |
 | `POST /api/v1/customers/receipts` | `branch_id`, `customer_id`, `amount_minor`, `method` |
 | `POST /api/v1/suppliers/payments` | `branch_id`, `supplier_id`, `amount_minor`, `method` |
 | `POST /api/v1/expenses` | `branch_id`, `category`, `amount_minor`, `method` |
-| `POST /api/v1/inventory/adjustments` | `branch_id`, `product_id`, signed `qty_change_milli`, `added_cost_minor` when adding, `reason` |
+| `POST /api/v1/inventory/adjustments` | `branch_id`, `product_id`, signed `qty_change_milli`, `added_cost_minor` when adding, `reason`; tracked products: `batch_id` when reducing, `lot_no` and `expires_on` when increasing |
 | `POST /api/v1/inventory/preparations` | `branch_id`, `source_product_id`, `output_product_id`, `input_qty_milli`, `output_qty_milli` |
 | `POST /api/v1/auth/logout` | Invalidates bearer token |
 
@@ -98,3 +99,9 @@ and its alternate units in the same tenant are rejected.
 
 The present purchase endpoint remains base-unit quantities only; automatic
 conversion in purchasing and expiry-lot tracking are not part of this migration.
+
+## FEFO lot stock (schema v3)
+
+Perishable products with `track_expiry=true` require a named lot and a valid expiry date for new purchases. Sales consume only unexpired lot quantities in earliest-expiry-first order. Returned sales restore the original sold batch identities; suppliers are returned only the original purchased lot. Tracked warehouse movements stay within a single branch. The API rejects tracked preparation until lot-preserving production is implemented.
+
+Read [the Arabic lot and expiry policy](EXPIRY_LOTS_AR.md) before use. Existing unbatched tracked stock requires a documented reconciliation; the server does **not** manufacture fake lot history.

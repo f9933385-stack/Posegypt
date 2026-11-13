@@ -4,6 +4,14 @@
 >
 > This repository contains an Arabic-first Flutter application for Windows / Android and a local Dart / Shelf / SQLite branch service. It implements a coherent core of the master specification and identifies the remaining release gates honestly.
 
+## معاينة تفاعلية (Demo UI)
+
+[**فتح معاينة Posegypt العربية من المتصفح**](https://raw.githack.com/f9933385-stack/Posegypt/8a6a727359e67077e6568638424a05ae46930abc/preview/index.html)
+
+> **تنبيه:** المعاينة صفحة HTML مستقلة **ببيانات تجريبية فقط**؛ لا تتصل بـ Flutter أو خادم Dart/SQLite الحقيقي، ولا تحفظ عمليات بيع حقيقية. تصلح لاختبار التنقل والشكل وسلة البيع الوهمية. تم التحقق آليًا من رابط العرض، لكن الاستضافة تتم عبر خدمة طرف ثالث وليس نطاقًا تجاريًا مضمون التوافر.
+
+**Software test status:** The latest feature-branch CI validates Dart, Flutter, SQLite operator tools, basic Windows/Android development builds and an independent browser demo link. See [GitHub Actions](https://github.com/f9933385-stack/Posegypt/actions) and [BUILD_STATUS](docs/BUILD_STATUS.md). A successful CI build does **not** mean the product is certified for live sales.
+
 ## What's included
 
 - **Flutter UI**: Arabic RTL, responsive desktop/tablet layout; login; user management; management dashboard; branch-wide cash shifts; POS with fractional quantities, cash/card/wallet/bank split payment, credit sale; product/stock views; purchase entry; customer/supplier records; expenses; document history.
@@ -73,7 +81,7 @@ flutter test
 flutter analyze
 ```
 
-**Build verification note:** these exact Dart/Flutter commands could not be run in the preparation environment because the Dart and Flutter SDKs were absent and outbound internet/DNS was unavailable. The embedded SQL DDL was parsed and successfully applied to in-memory SQLite with foreign keys enabled. Do not deploy on the basis of a static check alone.
+**Current verification:** GitHub Actions now runs Dart/Flutter analysis and tests, operator-tool checks, and Windows/Android development builds. Tests run on GitHub hosted runners; the latest results and any failures are visible under the Actions tab. These are **not** substitutes for field tests and legal certification.
 
 ## API quick start
 
@@ -88,7 +96,7 @@ flutter analyze
 
 ## Remaining production gates
 
-Do not market this as a complete commercial product yet. In particular: hardware printer/scale integrations, LAN TLS and QR pairing, real cloud sync and conflict replay, safe encrypted backups + restore drill, signed yearly per-device licensing (500 EGP), multi-drawer shift controls, complete batch/expiry allocation, unit conversion and advanced price/promotions, real tax/e-invoice integration, cross-branch in-transit transfer, import/export, end-to-end multi-device testing, Windows and Android binaries, performance testing and the full 34 acceptance scenarios remain to be implemented and verified. The source is structured for those next phases.
+Do not market this as a complete commercial product yet. In particular: hardware printer/scale integrations, LAN TLS and QR pairing, real cloud sync and conflict replay, safe encrypted backups + restore drill, signed yearly per-device licensing (500 EGP), multi-drawer shift controls, complete batch/expiry allocation, unit conversion and advanced price/promotions, real tax/e-invoice integration, cross-branch in-transit transfer, import/export, end-to-end multi-device testing, **production-signed** Windows and Android installers, performance testing and the full 34 acceptance scenarios remain to be implemented and verified. The source is structured for those next phases.
 
 Read [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and [`docs/SECURITY.md`](docs/SECURITY.md) before extending or deploying.
 

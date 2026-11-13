@@ -86,23 +86,22 @@ void main() {
     final tampered=decoded.replaceFirst('kasher-device-v1','forged-device-v1');
     expect(()=>licenses.activate(owner,urlEncode(utf8.encode(tampered))+'.'+parts[1]),
       throwsA(isA<DomainError>()));
-    expect(()=>licenses.activate(owner,await sign(device:'another-device')),
-      throwsA(isA<DomainError>()));
-    expect(()=>licenses.activate(owner,await sign(tenantId:'another-tenant')),
-      throwsA(isA<DomainError>()));
+    final foreignDevice=await sign(device:'another-device');
+    final foreignTenant=await sign(tenantId:'another-tenant');
+    expect(()=>licenses.activate(owner,foreignDevice),throwsA(isA<DomainError>()));
+    expect(()=>licenses.activate(owner,foreignTenant),throwsA(isA<DomainError>()));
     final altered=correct.substring(0,correct.length-2)+'zz';
     expect(()=>licenses.activate(owner,altered),throwsA(isA<DomainError>()));
     expect(store.rows('SELECT * FROM device_licenses'),isEmpty);
   });
 
   test('expired, future, or excessive-duration issuance is rejected',() async {
-    expect(()=>licenses.activate(owner,await sign(issued:DateTime.utc(2020,1,1))),
-      throwsA(isA<DomainError>()));
-    expect(()=>licenses.activate(owner,await sign(
-      issued:DateTime.now().toUtc().add(const Duration(days:3)))),
-      throwsA(isA<DomainError>()));
-    expect(()=>licenses.activate(owner,await sign(days:367)),
-      throwsA(isA<DomainError>()));
+    final expired=await sign(issued:DateTime.utc(2020,1,1));
+    final future=await sign(issued:DateTime.now().toUtc().add(const Duration(days:3)));
+    final overlong=await sign(days:367);
+    expect(()=>licenses.activate(owner,expired),throwsA(isA<DomainError>()));
+    expect(()=>licenses.activate(owner,future),throwsA(isA<DomainError>()));
+    expect(()=>licenses.activate(owner,overlong),throwsA(isA<DomainError>()));
   });
 
   test('clock rollback guard blocks writes and renewal on same persistent device',() async {
@@ -110,8 +109,8 @@ void main() {
     store.exec("UPDATE license_clock_guards SET max_seen_at='2099-01-01T00:00:00Z'");
     expect((await licenses.status(owner))['status'],'clock_rollback');
     expect(()=>licenses.requireWritable(owner),throwsA(isA<DomainError>()));
-    expect(()=>licenses.activate(owner,await sign(serial:'renewal-new-serial-987654321')),
-      throwsA(isA<DomainError>()));
+    final renewal=await sign(serial:'renewal-new-serial-987654321');
+    expect(()=>licenses.activate(owner,renewal),throwsA(isA<DomainError>()));
   });
 
   test('revoking enrolled device disables licensed operations',() async {

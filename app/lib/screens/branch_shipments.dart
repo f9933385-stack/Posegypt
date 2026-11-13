@@ -56,7 +56,7 @@ class _BranchShipmentsState extends State<BranchShipmentsPage> {
               items:branches.where((x)=>x['id']!=source).map((x)=>
                 DropdownMenuItem<String>(
                   value:x['id'].toString(),child:Text(x['name'].toString()))).toList(),
-              onChanged:(v)=>change((){if(v!=null)dest=v;}),
+              onChanged:(v)=>change((){if(v!=null)dest=v;})),
           ])),
           actions:[
             TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),

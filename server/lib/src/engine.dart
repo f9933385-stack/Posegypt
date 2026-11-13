@@ -1068,7 +1068,7 @@ class PosEngine {
   }
 
   List<Map<String,Object?>> listBranchShipments(Principal p,String branchId) {
-    _allow(p,['owner','manager','stock']);
+    _allow(p,['owner','manager']);
     final branch=_branch(p,branchId);
     return store.rows('''SELECT s.id,s.source_branch_id,s.destination_branch_id,
       s.source_warehouse_id,s.destination_warehouse_id,s.product_id,
@@ -1084,7 +1084,7 @@ class PosEngine {
   }
 
   Map<String,Object?> readBranchShipment(Principal p,String shipmentId) {
-    _allow(p,['owner','manager','stock']);
+    _allow(p,['owner','manager']);
     final shipment=_shipment(p,shipmentId);
     final source=shipment['source_branch_id'] as String;
     final dest=shipment['destination_branch_id'] as String;
@@ -1114,6 +1114,13 @@ class PosEngine {
     if(qty>1000000000000) throw DomainError('Shipment quantity exceeds safe limit');
     final id=_id();
     final cost=_stock(p,source,sourceWarehouse,product,-qty,0,'branch_dispatch',id);
+    store.exec('''INSERT INTO branch_shipments
+      (id,tenant_id,source_branch_id,destination_branch_id,
+       source_warehouse_id,destination_warehouse_id,
+       product_id,qty_milli,cost_minor,status,dispatched_by,dispatched_at)
+      VALUES(?,?,?,?,?,?,?,?,?,'in_transit',?,?)''',
+      [id,p.tenantId,source,destination,sourceWarehouse,destWarehouse,
+        product,qty,cost,p.id,_now()]);
     if(_tracksLots(p,product)) {
       final picked=_consumeFefo(sourceWarehouse,product,qty,'branch_dispatch',id);
       for(final item in picked) {
@@ -1124,13 +1131,6 @@ class PosEngine {
       }
       _assertLotMatchesStock(source,sourceWarehouse,product);
     }
-    store.exec('''INSERT INTO branch_shipments
-      (id,tenant_id,source_branch_id,destination_branch_id,
-       source_warehouse_id,destination_warehouse_id,
-       product_id,qty_milli,cost_minor,status,dispatched_by,dispatched_at)
-      VALUES(?,?,?,?,?,?,?,?,?,'in_transit',?,?)''',
-      [id,p.tenantId,source,destination,sourceWarehouse,destWarehouse,
-        product,qty,cost,p.id,_now()]);
     if(cost>0) {
       _post(p,source,'branch_dispatch',id,
         [LedgerLine('IN_TRANSIT',debit:cost),

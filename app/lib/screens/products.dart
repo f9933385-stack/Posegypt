@@ -18,6 +18,7 @@ class _ProductsState extends State<ProductsPage> {
   Future<void> _createProduct() async {
     final sku=TextEditingController(),barcode=TextEditingController(),name=TextEditingController(),
       price=TextEditingController(),unit=TextEditingController(text:'قطعة'),reorder=TextEditingController(text:'0');
+    final trackExpiry=ValueNotifier<bool>(false);
     final result=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
       title:const Text('إضافة صنف جديد'),content:SizedBox(width:480,child:SingleChildScrollView(child:Column(
         mainAxisSize:MainAxisSize.min,children:[
@@ -29,12 +30,19 @@ class _ProductsState extends State<ProductsPage> {
           const SizedBox(height:10),TextField(controller:unit,decoration:const InputDecoration(labelText:'وحدة الأساس')),
           const SizedBox(height:10),TextField(controller:reorder,keyboardType:TextInputType.number,
             decoration:const InputDecoration(labelText:'حد إعادة الطلب')),
+          ValueListenableBuilder<bool>(valueListenable:trackExpiry,
+            builder:(context,checked,_)=>CheckboxListTile(
+              title:const Text('تتبّع التشغيلات وتواريخ الصلاحية'),
+              subtitle:const Text('يلزم رقم التشغيلة وتاريخ الانتهاء في كل شراء.'),
+              value:checked,onChanged:(value)=>trackExpiry.value=value??false)),
         ]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
         FilledButton(onPressed:(){try {Navigator.pop(ctx,{'sku':sku.text,'barcode':barcode.text,
           'name_ar':name.text,'base_unit':unit.text,'sell_price_minor':parseMoney(price.text),
-          'reorder_qty_milli':parseQty(reorder.text)});}catch(_){alert(ctx,'تأكد من صحة السعر والكمية',error:true);}},
+          'reorder_qty_milli':parseQty(reorder.text),
+          'track_expiry':trackExpiry.value});}catch(_){alert(ctx,'تأكد من صحة السعر والكمية',error:true);}},
           child:const Text('إضافة'))]));
     for(final c in [sku,barcode,name,price,unit,reorder]){c.dispose();}
+    trackExpiry.dispose();
     if(result==null)return;
     try {await widget.api.post('products',result);if(mounted){alert(context,'تمت إضافة الصنف');_reload();}}
     catch(e){if(mounted)alert(context,'تعذر الإضافة: $e',error:true);}
@@ -79,26 +87,107 @@ class _ProductsState extends State<ProductsPage> {
     }catch(e){if(mounted)alert(context,'تعذر إضافة الوحدة: $e',error:true);}
   }
 
-  Future<void> _adjust(Map<String,dynamic> product) async {
-    final qty=TextEditingController(),cost=TextEditingController(text:'0'),reason=TextEditingController();
-    final result=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
-      title:Text('تسوية مخزون: ${product['name_ar']}'),
-      content:Column(mainAxisSize:MainAxisSize.min,children:[
-        const Text('للزيادة أدخل كمية موجبة وتكلفتها؛ وللنقص أدخل كمية سالبة.'),
-        const SizedBox(height:10),TextField(controller:qty,decoration:const InputDecoration(labelText:'التغير في الكمية (+ أو -)')),
-        const SizedBox(height:10),TextField(controller:cost,decoration:const InputDecoration(labelText:'تكلفة الكمية المضافة بالجنيه')),
-        const SizedBox(height:10),TextField(controller:reason,decoration:const InputDecoration(labelText:'سبب التسوية')),
-      ]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
-        FilledButton(onPressed:(){try {
-          final q=qty.text.startsWith('-')?-parseQty(qty.text.substring(1)):parseQty(qty.text);
-          Navigator.pop(ctx,{'product_id':product['id'],'branch_id':widget.branchId,
-            'qty_change_milli':q,'added_cost_minor':parseMoney(cost.text),'reason':reason.text});
-        }catch(_){alert(ctx,'قيم غير صالحة',error:true);}},child:const Text('اعتماد'))]));
-    for(final c in [qty,cost,reason]){c.dispose();}
-    if(result==null)return;
-    try {await widget.api.post('inventory/adjustments',result);if(mounted){alert(context,'تم تحديث المخزون');_reload();}}
-    catch(e){if(mounted)alert(context,'فشلت التسوية: $e',error:true);}
+  Future<void> _showLots(Map<String,dynamic> product) async {
+    try {
+      final lots=await widget.api.list('lots',{
+        'branch_id':widget.branchId,'product_id':product['id'].toString()});
+      if(!mounted)return;
+      await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('تشغيلات وتواريخ صلاحية: '+product['name_ar'].toString()),
+        content:SizedBox(width:520,height:330,child:lots.isEmpty
+          ?const Center(child:Text('لا توجد تشغيلات مسجلة لهذا الصنف'))
+          :ListView.builder(itemCount:lots.length,itemBuilder:(ctx,i){
+            final lot=lots[i],expired=lot['expired']==true;
+            return ListTile(leading:Icon(expired?Icons.warning_amber:Icons.event_available,
+                color:expired?Colors.red:null),
+              title:Text('التشغيلة: '+lot['lot_no'].toString()),
+              subtitle:Text('ينتهي: '+lot['expires_on'].toString()),
+              trailing:Column(mainAxisSize:MainAxisSize.min,children:[
+                Text(quantity(asInt(lot['qty_milli']))),
+                Text(expired?'منتهية':'صالحة للبيع',
+                  style:TextStyle(color:expired?Colors.red:Colors.green,fontSize:11)),
+              ]));
+          })),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إغلاق'))],
+      ));
+    }catch(e){if(mounted)alert(context,'تعذر تحميل التشغيلات: '+e.toString(),error:true);}
   }
+
+  Future<void> _adjust(Map<String,dynamic> product) async {
+    final tracked=product['track_expiry']==1;
+    List<Map<String,dynamic>> lots=<Map<String,dynamic>>[];
+    if(tracked){
+      try {
+        lots=await widget.api.list('lots',{
+          'branch_id':widget.branchId,'product_id':product['id'].toString()});
+      }catch(e){
+        if(mounted)alert(context,'تعذر تحميل التشغيلات: '+e.toString(),error:true);
+        return;
+      }
+    }
+    if(!mounted)return;
+    final qty=TextEditingController(),cost=TextEditingController(text:'0'),
+      reason=TextEditingController(),lotNo=TextEditingController(),
+      expiry=TextEditingController();
+    String? selectedBatch;
+    final result=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text('تسوية مخزون: '+product['name_ar'].toString()),
+      content:SizedBox(width:480,child:SingleChildScrollView(child:Column(
+        mainAxisSize:MainAxisSize.min,children:[
+        const Text('للزيادة أدخل كمية موجبة وتكلفتها؛ وللنقص أدخل كمية سالبة.'),
+        const SizedBox(height:10),
+        TextField(controller:qty,decoration:const InputDecoration(labelText:'التغير في الكمية (+ أو -)')),
+        const SizedBox(height:10),
+        TextField(controller:cost,decoration:const InputDecoration(labelText:'تكلفة الكمية المضافة بالجنيه')),
+        const SizedBox(height:10),
+        TextField(controller:reason,decoration:const InputDecoration(labelText:'سبب التسوية')),
+        if(tracked)...[
+          const SizedBox(height:14),
+          const Text('للزيادة: رقم التشغيلة وتاريخ انتهاء صالح. للنقص: اختر التشغيلة الحالية.'),
+          const SizedBox(height:8),
+          TextField(controller:lotNo,decoration:const InputDecoration(labelText:'رقم التشغيلة للزيادة')),
+          const SizedBox(height:8),
+          TextField(controller:expiry,decoration:const InputDecoration(labelText:'تاريخ الانتهاء YYYY-MM-DD')),
+          const SizedBox(height:8),
+          DropdownButtonFormField<String>(isExpanded:true,
+            decoration:const InputDecoration(labelText:'التشغيلة المسحوب منها عند النقص'),
+            items:lots.where((x)=>asInt(x['qty_milli'])>0)
+              .map((lot)=>DropdownMenuItem<String>(
+                value:lot['id'].toString(),
+                child:Text(lot['lot_no'].toString()+' • '+lot['expires_on'].toString())))
+              .toList(),
+            onChanged:(value)=>selectedBatch=value),
+        ],
+      ]))),actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
+        FilledButton(onPressed:(){try {
+          final q=qty.text.startsWith('-')
+            ?-parseQty(qty.text.substring(1)):parseQty(qty.text);
+          if(q==0) throw const FormatException('Zero quantity');
+          if(tracked && q>0 && (lotNo.text.trim().isEmpty || expiry.text.trim().isEmpty)) {
+            throw const FormatException('Lot and expiry required');
+          }
+          if(tracked && q<0 && selectedBatch==null) {
+            throw const FormatException('Select a lot');
+          }
+          Navigator.pop(ctx,{'product_id':product['id'],'branch_id':widget.branchId,
+            'qty_change_milli':q,'added_cost_minor':parseMoney(cost.text),
+            'reason':reason.text,
+            if(tracked && q>0)'lot_no':lotNo.text.trim(),
+            if(tracked && q>0)'expires_on':expiry.text.trim(),
+            if(tracked && q<0)'batch_id':selectedBatch});
+        }catch(_){alert(ctx,'تحقق من الكمية وبيانات التشغيلة',error:true);}},
+          child:const Text('اعتماد')),
+      ],
+    ));
+    for(final c in [qty,cost,reason,lotNo,expiry]){c.dispose();}
+    if(result==null)return;
+    try {
+      await widget.api.post('inventory/adjustments',result);
+      if(mounted){alert(context,'تم تحديث المخزون');_reload();}
+    }catch(e){if(mounted)alert(context,'فشلت التسوية: '+e.toString(),error:true);}
+  }
+
   @override Widget build(BuildContext context)=>Column(children:[
     SectionTitle('الأصناف والمخزون',subtitle:'الأصناف الحقيقية في قاعدة البيانات وحركات المخزون المعتمدة.',
       action:FilledButton.icon(onPressed:_createProduct,icon:const Icon(Icons.add),label:const Text('صنف جديد'))),
@@ -111,6 +200,8 @@ class _ProductsState extends State<ProductsPage> {
           return Card(child:ListTile(leading:CircleAvatar(child:Icon(low?Icons.warning_amber:Icons.inventory_2_outlined)),
             title:Text(p['name_ar'].toString()),subtitle:Text('${p['sku']} • ${p['base_unit']} • رصيد ${quantity(available)}'),
             trailing:Row(mainAxisSize:MainAxisSize.min,children:[Text(money(asInt(p['sell_price_minor']))),
+              if(p['track_expiry']==1)IconButton(onPressed:()=>_showLots(p),
+                tooltip:'عرض التشغيلات والصلاحية',icon:const Icon(Icons.event_note)),
               IconButton(onPressed:()=>_createUnit(p),tooltip:'إضافة وحدة بيع (كرتونة/علبة)',
                 icon:const Icon(Icons.all_inbox_outlined)),
               IconButton(onPressed:()=>_adjust(p),tooltip:'تسوية المخزون',icon:const Icon(Icons.tune))])));});

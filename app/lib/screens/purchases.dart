@@ -7,8 +7,10 @@ class DraftPurchase {
   final Map<String,dynamic> product;
   final TextEditingController qty=TextEditingController(text:'1');
   final TextEditingController cost=TextEditingController();
+  final TextEditingController lotNo=TextEditingController();
+  final TextEditingController expiresOn=TextEditingController();
   DraftPurchase(this.product);
-  void dispose(){qty.dispose();cost.dispose();}
+  void dispose(){qty.dispose();cost.dispose();lotNo.dispose();expiresOn.dispose();}
 }
 class PurchasesPage extends StatefulWidget {
   final ApiClient api;
@@ -30,8 +32,17 @@ class _PurchasesState extends State<PurchasesPage> {
     setState(()=>posting=true);
     try {
       final due=<Map<String,dynamic>>[];
-      for(final item in lines){due.add({'product_id':item.product['id'],
-        'qty_milli':parseQty(item.qty.text),'unit_cost_minor':parseMoney(item.cost.text)});}
+      for(final item in lines){
+        final tracked=item.product['track_expiry']==1;
+        if(tracked && (item.lotNo.text.trim().isEmpty ||
+           item.expiresOn.text.trim().isEmpty)) {
+          throw const FormatException('رقم التشغيلة وتاريخ الصلاحية مطلوبان');
+        }
+        due.add({'product_id':item.product['id'],
+          'qty_milli':parseQty(item.qty.text),'unit_cost_minor':parseMoney(item.cost.text),
+          if(tracked)'lot_no':item.lotNo.text.trim(),
+          if(tracked)'expires_on':item.expiresOn.text.trim()});
+      }
       final value=parseMoney(payment.text);
       final saved=await widget.api.post('purchases',{'branch_id':widget.branchId,'supplier_id':supplierId,
         'lines':due,'payments':value>0?[{'method':method,'amount_minor':value}]:[]});
@@ -61,13 +72,29 @@ class _PurchasesState extends State<PurchasesPage> {
             setState(()=>lines.add(DraftPurchase(item)));
           },icon:const Icon(Icons.add_circle))])),
       const SizedBox(height:16),
-      for(var i=0;i<lines.length;i++)Card(child:Padding(padding:const EdgeInsets.all(12),child:Row(children:[
-        Expanded(flex:3,child:Text(lines[i].product['name_ar'].toString())),
-        const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].qty,
-          decoration:const InputDecoration(labelText:'كمية'))),
-        const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].cost,
-          decoration:const InputDecoration(labelText:'تكلفة الوحدة (ج.م)'))),
-        IconButton(onPressed:(){setState(()=>lines.removeAt(i).dispose());},icon:const Icon(Icons.delete_outline))
+      for(var i=0;i<lines.length;i++)Card(child:Padding(
+        padding:const EdgeInsets.all(12),child:Column(children:[
+        Row(children:[
+          Expanded(flex:3,child:Text(lines[i].product['name_ar'].toString())),
+          const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].qty,
+            decoration:const InputDecoration(labelText:'كمية'))),
+          const SizedBox(width:8),Expanded(flex:2,child:TextField(controller:lines[i].cost,
+            decoration:const InputDecoration(labelText:'تكلفة الوحدة (ج.م)'))),
+          IconButton(onPressed:(){setState(()=>lines.removeAt(i).dispose());},
+            icon:const Icon(Icons.delete_outline)),
+        ]),
+        if(lines[i].product['track_expiry']==1)...[
+          const SizedBox(height:10),
+          const Text('يلزم تسجيل تشغيلة كل بند وتاريخ الانتهاء حتى يُقبل توريد هذا الصنف.'),
+          const SizedBox(height:8),
+          Row(children:[
+            Expanded(child:TextField(controller:lines[i].lotNo,
+              decoration:const InputDecoration(labelText:'رقم التشغيلة LOT'))),
+            const SizedBox(width:8),
+            Expanded(child:TextField(controller:lines[i].expiresOn,
+              decoration:const InputDecoration(labelText:'تاريخ الانتهاء YYYY-MM-DD'))),
+          ]),
+        ],
       ]))),
       const SizedBox(height:12),TextField(controller:payment,
         decoration:const InputDecoration(labelText:'المبلغ المدفوع الآن (0 للشراء الآجل)')),

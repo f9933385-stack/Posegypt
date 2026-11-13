@@ -10,20 +10,31 @@ class DatabaseStore {
     final file = File(filePath);
     if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
     final db = sqlite3.open(filePath);
-    db.execute('PRAGMA foreign_keys=ON');
-    db.execute('PRAGMA busy_timeout=5000');
-    db.execute('PRAGMA journal_mode=WAL');
-    db.execute('BEGIN IMMEDIATE');
     try {
-      db.execute('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
-      final ver = db.select('SELECT MAX(version) AS version FROM schema_version').first['version'] as int? ?? 0;
-      if (ver < 1) {
-        for (final stmt in schemaV1) { db.execute(stmt); }
-        db.execute('INSERT INTO schema_version(version) VALUES(1)');
+      db.execute('PRAGMA foreign_keys=ON');
+      db.execute('PRAGMA busy_timeout=5000');
+      db.execute('PRAGMA journal_mode=WAL');
+      db.execute('BEGIN IMMEDIATE');
+      try {
+        db.execute('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
+        final ver = db.select('SELECT MAX(version) AS version FROM schema_version').first['version'] as int? ?? 0;
+        // Never downgrade/migrate a database created by newer application code.
+        // A silent open could corrupt future schema or financial records.
+        if (ver > 1) throw StateError('Database schema $ver is newer than supported schema 1');
+        if (ver < 1) {
+          for (final stmt in schemaV1) { db.execute(stmt); }
+          db.execute('INSERT INTO schema_version(version) VALUES(1)');
+        }
+        db.execute('COMMIT');
+      } catch (_) {
+        db.execute('ROLLBACK');
+        rethrow;
       }
-      db.execute('COMMIT');
-    } catch (_) { db.execute('ROLLBACK'); rethrow; }
-    return DatabaseStore._(db);
+      return DatabaseStore._(db);
+    } catch (_) {
+      db.dispose(); // No leaked file handles / WAL locks on migration failure.
+      rethrow;
+    }
   }
 
   factory DatabaseStore.memory() {

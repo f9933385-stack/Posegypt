@@ -81,6 +81,8 @@ class KasherApi {
     router.get('/api/v1/lots', (Request r)=>_json(engine.listLots(_p(r),_branch(r),
       warehouseId:r.url.queryParameters['warehouse_id'],
       productId:r.url.queryParameters['product_id'])));
+    router.get('/api/v1/counts', (Request r)=>_json(engine.listCounts(_p(r),_branch(r))));
+    router.get('/api/v1/counts/<id>', (Request r,String id)=>_json(engine.readCount(_p(r),id)));
     router.get('/api/v1/stock', (Request r)=>_json(engine.listStock(_p(r),_branch(r))));
     router.get('/api/v1/documents', (Request r)=>_json(engine.listDocuments(_p(r),_branch(r))));
     router.get('/api/v1/documents/<id>', (Request r,String id)=>_json(engine.readDocument(_p(r),id)));
@@ -94,6 +96,8 @@ class KasherApi {
       'inventory/transfers':'transfer_warehouse','lots/quarantine':'set_lot_quarantine','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
       'purchases/returns':'purchase_return','customers/receipts':'customer_receipt',
       'suppliers/payments':'supplier_payment','expenses':'expense',
+      'counts':'count_open','counts/lines':'count_line','counts/submit':'count_submit',
+      'counts/approve':'count_approve','counts/cancel':'count_cancel',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',
       'shifts/open':'shift_open','shifts/close':'shift_close',
     };

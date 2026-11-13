@@ -164,6 +164,11 @@ class PosEngine {
       case 'customer_receipt': return _settle(p,input,customer:true);
       case 'supplier_payment': return _settle(p,input,customer:false);
       case 'expense': return _expense(p,input);
+      case 'count_open': return _openCount(p,input);
+      case 'count_line': return _recordCountLine(p,input);
+      case 'count_submit': return _submitCount(p,input);
+      case 'count_approve': return _approveCount(p,input);
+      case 'count_cancel': return _cancelCount(p,input);
       case 'adjust_stock': return _adjust(p,input);
       case 'prepare': return _prepare(p,input);
       case 'shift_open': return _shiftOpen(p,input);
@@ -667,6 +672,228 @@ class PosEngine {
     _audit(p,'expense.posted',id,{'category':category,'amount_minor':amount},branch);
     _outbox(branch,'expense',{'id':id,'amount_minor':amount});
     return {'id':id,'amount_minor':amount};
+  }
+
+
+  // A conservative, branch-local stocktake. No sync or locking of open sales:
+  // a movement watermark forces a new count if stock changed meanwhile.
+  Map<String,Object?> _count(Principal p,String id) {
+    final count=store.first('SELECT * FROM stock_counts WHERE id=?',[id]);
+    if(count==null) throw DomainError('Stock count not found',404);
+    _branch(p,count['branch_id']);
+    return count;
+  }
+
+  int _warehouseMovementCount(String branch,String warehouse) =>
+    store.first('''SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE branch_id=? AND warehouse_id=?''',[branch,warehouse])!['n'] as int;
+
+  List<Map<String,Object?>> listCounts(Principal p,String branchId) {
+    _allow(p,['owner','manager','stock']);
+    final branch=_branch(p,branchId);
+    return store.rows('''SELECT c.id,c.branch_id,c.warehouse_id,c.status,c.reason,
+      c.created_by,c.approved_by,c.created_at,c.submitted_at,c.approved_at,
+      w.name AS warehouse_name,
+      (SELECT COUNT(*) FROM stock_count_lines l WHERE l.count_id=c.id) AS line_count,
+      (SELECT COUNT(*) FROM stock_count_lines l WHERE l.count_id=c.id
+        AND l.counted_qty_milli IS NOT NULL) AS counted_lines
+      FROM stock_counts c JOIN warehouses w ON w.id=c.warehouse_id
+      WHERE c.branch_id=? ORDER BY c.created_at DESC,c.id DESC LIMIT 100''',[branch]);
+  }
+
+  Map<String,Object?> readCount(Principal p,String id) {
+    _allow(p,['owner','manager','stock']);
+    final count=_count(p,id);
+    final lines=store.rows('''SELECT l.id,l.product_id,l.batch_id,
+      l.expected_qty_milli,l.expected_cost_minor,l.counted_qty_milli,
+      l.added_cost_minor,l.counted_by,l.counted_at,
+      p.name_ar,p.sku,p.track_expiry,b.lot_no,b.expires_on
+      FROM stock_count_lines l JOIN products p ON p.id=l.product_id
+      LEFT JOIN batches b ON b.id=l.batch_id
+      WHERE l.count_id=? ORDER BY p.name_ar,b.expires_on,l.id''',[id]);
+    if(p.role=='stock') {
+      for(final line in lines) line.remove('expected_cost_minor');
+    }
+    return {...count,'lines':lines};
+  }
+
+  Map<String,Object?> _openCount(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','stock']);
+    final branch=_branch(p,input['branch_id']);
+    final warehouse=_warehouse(branch,input['warehouse_id']);
+    final reason=nonEmpty(input['reason'],'reason');
+    final existing=store.first('''SELECT id FROM stock_counts WHERE warehouse_id=?
+      AND status IN ('draft','submitted')''',[warehouse]);
+    if(existing!=null) throw DomainError('Active stock count already exists for this warehouse',409);
+    final balances=store.rows('''SELECT s.product_id,s.qty_milli,s.cost_minor,p.track_expiry
+      FROM stock_balances s JOIN products p ON p.id=s.product_id
+      WHERE s.branch_id=? AND s.warehouse_id=? AND p.tenant_id=?
+      AND p.active=1 ORDER BY s.product_id''',
+      [branch,warehouse,p.tenantId]);
+    if(balances.isEmpty) throw DomainError('Warehouse has no recorded stock to count',409);
+    final candidates=<Map<String,Object?>>[];
+    for(final row in balances) {
+      final product=row['product_id'] as String;
+      if(row['track_expiry']==1) {
+        _assertLotMatchesStock(branch,warehouse,product);
+        final batches=store.rows('''SELECT id,qty_milli FROM batches
+          WHERE warehouse_id=? AND product_id=? AND qty_milli>0 ORDER BY id''',
+          [warehouse,product]);
+        for(final batch in batches) {
+          candidates.add({'product_id':product,'batch_id':batch['id'],
+            'qty':batch['qty_milli'],'cost':row['cost_minor']});
+        }
+      } else {
+        candidates.add({'product_id':product,'batch_id':null,
+          'qty':row['qty_milli'],'cost':row['cost_minor']});
+      }
+    }
+    if(candidates.isEmpty) throw DomainError('No inventory count lines to record',409);
+    if(candidates.length>2000) throw DomainError('Count exceeds 2000 lines; count smaller warehouses',413);
+    final id=_id(),now=_now();
+    store.exec('''INSERT INTO stock_counts(id,branch_id,warehouse_id,status,reason,
+      created_by,movement_watermark,created_at) VALUES(?,?,?,'draft',?,?,?,?)''',
+      [id,branch,warehouse,reason,p.id,_warehouseMovementCount(branch,warehouse),now]);
+    for(final line in candidates) {
+      store.exec('''INSERT INTO stock_count_lines(id,count_id,product_id,batch_id,
+        expected_qty_milli,expected_cost_minor)
+        VALUES(?,?,?,?,?,?)''',
+        [_id(),id,line['product_id'],line['batch_id'],line['qty'],line['cost']]);
+    }
+    _audit(p,'stock_count.open',id,{'warehouse_id':warehouse,'lines':candidates.length},branch);
+    return {'id':id,'status':'draft','line_count':candidates.length};
+  }
+
+  Map<String,Object?> _recordCountLine(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','stock']);
+    final count=_count(p,nonEmpty(input['count_id'],'count_id'));
+    if(count['status']!='draft') throw DomainError('Only draft stock counts are editable',409);
+    final line=store.first('SELECT * FROM stock_count_lines WHERE id=? AND count_id=?',
+      [nonEmpty(input['line_id'],'line_id'),count['id']]);
+    if(line==null) throw DomainError('Stock count line not found',404);
+    final counted=strictInt(input['counted_qty_milli'],'counted_qty_milli');
+    if(counted>1000000000000) throw DomainError('Count exceeds numeric safety limit');
+    final delta=counted-(line['expected_qty_milli'] as int);
+    final added=input['added_cost_minor']==null?null:
+      strictInt(input['added_cost_minor'],'added_cost_minor');
+    if(delta>0 && (added==null || added<=0)) {
+      throw DomainError('Positive count variance requires exact added-cost valuation',400);
+    }
+    if(delta<=0 && added!=null && added!=0) {
+      throw DomainError('Added cost only applies to positive count variances');
+    }
+    store.exec('''UPDATE stock_count_lines SET counted_qty_milli=?,added_cost_minor=?,
+      counted_by=?,counted_at=? WHERE id=?''',
+      [counted,delta>0?added:0,p.id,_now(),line['id']]);
+    return {'count_id':count['id'],'line_id':line['id'],
+      'counted_qty_milli':counted,'variance_qty_milli':delta};
+  }
+
+  void _ensureFreshCount(Map<String,Object?> count) {
+    final branch=count['branch_id'] as String,warehouse=count['warehouse_id'] as String;
+    if(_warehouseMovementCount(branch,warehouse)!=(count['movement_watermark'] as int)) {
+      throw DomainError('Inventory changed since count began. Cancel and recount',409);
+    }
+    final lines=store.rows('SELECT * FROM stock_count_lines WHERE count_id=?',[count['id']]);
+    for(final line in lines) {
+      final stock=store.first('''SELECT qty_milli,cost_minor FROM stock_balances
+        WHERE branch_id=? AND warehouse_id=? AND product_id=?''',
+        [branch,warehouse,line['product_id']]);
+      if(stock==null) throw DomainError('Stock balance no longer exists. Recount required',409);
+      final product=store.first('SELECT track_expiry FROM products WHERE id=?',[line['product_id']]);
+      if(product==null) throw DomainError('Product changed during count',409);
+      if(line['batch_id']==null) {
+        if(stock['qty_milli']!=line['expected_qty_milli'] ||
+            stock['cost_minor']!=line['expected_cost_minor']) {
+          throw DomainError('Stock snapshot changed. Recount required',409);
+        }
+      } else {
+        final lot=store.first('SELECT qty_milli FROM batches WHERE id=? AND warehouse_id=?',
+          [line['batch_id'],warehouse]);
+        if(lot==null || lot['qty_milli']!=line['expected_qty_milli']) {
+          throw DomainError('Lot quantity changed. Recount required',409);
+        }
+      }
+    }
+  }
+
+  Map<String,Object?> _submitCount(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','stock']);
+    final count=_count(p,nonEmpty(input['count_id'],'count_id'));
+    if(count['status']!='draft') throw DomainError('Count must be draft',409);
+    final lines=store.rows('SELECT counted_qty_milli FROM stock_count_lines WHERE count_id=?',[count['id']]);
+    if(lines.isEmpty || lines.any((x)=>x['counted_qty_milli']==null)) {
+      throw DomainError('Every line must be counted, including zero quantities',409);
+    }
+    _ensureFreshCount(count);
+    store.exec("UPDATE stock_counts SET status='submitted',submitted_at=? WHERE id=?",
+      [_now(),count['id']]);
+    _audit(p,'stock_count.submit',count['id'] as String,{'lines':lines.length},
+      count['branch_id'] as String);
+    return {'id':count['id'],'status':'submitted'};
+  }
+
+  Map<String,Object?> _approveCount(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final count=_count(p,nonEmpty(input['count_id'],'count_id'));
+    if(count['status']!='submitted') throw DomainError('Count must be submitted',409);
+    if(count['created_by']==p.id) {
+      throw DomainError('Independent approver required; counter may not approve own count',403);
+    }
+    _ensureFreshCount(count);
+    final branch=count['branch_id'] as String,warehouse=count['warehouse_id'] as String,
+      countId=count['id'] as String;
+    final lines=store.rows('''SELECT l.*,p.track_expiry FROM stock_count_lines l
+      JOIN products p ON p.id=l.product_id WHERE l.count_id=?
+      ORDER BY l.product_id,l.batch_id''',[countId]);
+    var changed=0,valueUp=0,valueDown=0;
+    for(final line in lines) {
+      final counted=line['counted_qty_milli'] as int?;
+      if(counted==null) throw DomainError('Incomplete count cannot be approved',409);
+      final delta=counted-(line['expected_qty_milli'] as int);
+      if(delta==0) continue;
+      final product=line['product_id'] as String;
+      final added=delta>0?strictInt(line['added_cost_minor'],'added_cost_minor',min:1):0;
+      // _stock and _moveLot are in the same SQL transaction. Any failed line
+      // rolls back ALL movement and journal writes from the approval.
+      final value=_stock(p,branch,warehouse,product,delta,added,'stock_count',countId);
+      if(line['track_expiry']==1) {
+        final batch=line['batch_id'] as String?;
+        if(batch==null) throw DomainError('Tracked stock count missing original batch',409);
+        _moveLot(warehouse,product,batch,delta,'stock_count',countId);
+        _assertLotMatchesStock(branch,warehouse,product);
+      }
+      if(value>0) {
+        _post(p,branch,'stock_count',countId,delta>0
+          ?[LedgerLine('INVENTORY',debit:value),
+            LedgerLine('INVENTORY_ADJUSTMENT',credit:value)]
+          :[LedgerLine('INVENTORY_ADJUSTMENT',debit:value),
+            LedgerLine('INVENTORY',credit:value)]);
+      }
+      if(delta>0) valueUp+=value; else valueDown+=value;
+      changed++;
+    }
+    store.exec("UPDATE stock_counts SET status='posted',approved_by=?,approved_at=? WHERE id=?",
+      [p.id,_now(),countId]);
+    _audit(p,'stock_count.post',countId,{'changed_lines':changed,
+      'value_added_minor':valueUp,'value_removed_minor':valueDown},branch);
+    _outbox(branch,'stock_count',{'id':countId,'warehouse_id':warehouse,
+      'changed_lines':changed,'value_added_minor':valueUp,'value_removed_minor':valueDown});
+    return {'id':countId,'status':'posted','changed_lines':changed,
+      'value_added_minor':valueUp,'value_removed_minor':valueDown};
+  }
+
+  Map<String,Object?> _cancelCount(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final count=_count(p,nonEmpty(input['count_id'],'count_id'));
+    if(count['status']=='posted' || count['status']=='cancelled') {
+      throw DomainError('Only active stock counts can be cancelled',409);
+    }
+    final reason=nonEmpty(input['reason'],'reason');
+    store.exec("UPDATE stock_counts SET status='cancelled' WHERE id=?",[count['id']]);
+    _audit(p,'stock_count.cancel',count['id'] as String,{'reason':reason},
+      count['branch_id'] as String);
+    return {'id':count['id'],'status':'cancelled'};
   }
 
   Map<String,Object?> _adjust(Principal p,Map<String,dynamic> input) {

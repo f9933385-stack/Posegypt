@@ -211,3 +211,40 @@ const schemaV4 = <String>[
   '''ALTER TABLE batches ADD COLUMN quarantine_reason TEXT''',
   '''ALTER TABLE batches ADD COLUMN quarantine_updated_at TEXT''',
 ];
+
+
+/// V5: independently counted warehouse snapshots, submitted for four-eye approval.
+/// No financial or physical stock effects before an authorized manager approves.
+const schemaV5 = <String>[
+  '''CREATE TABLE IF NOT EXISTS stock_counts (
+    id TEXT PRIMARY KEY,
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+    status TEXT NOT NULL CHECK(status IN ('draft','submitted','posted','cancelled')),
+    reason TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    approved_by TEXT REFERENCES users(id),
+    movement_watermark INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    submitted_at TEXT,
+    approved_at TEXT
+  )''',
+  '''CREATE UNIQUE INDEX IF NOT EXISTS ux_open_count_warehouse
+    ON stock_counts(warehouse_id) WHERE status IN ('draft','submitted')''',
+  '''CREATE INDEX IF NOT EXISTS ix_stock_counts_branch
+    ON stock_counts(branch_id,created_at)''',
+  '''CREATE TABLE IF NOT EXISTS stock_count_lines (
+    id TEXT PRIMARY KEY,
+    count_id TEXT NOT NULL REFERENCES stock_counts(id),
+    product_id TEXT NOT NULL REFERENCES products(id),
+    batch_id TEXT REFERENCES batches(id),
+    expected_qty_milli INTEGER NOT NULL CHECK(expected_qty_milli>=0),
+    expected_cost_minor INTEGER NOT NULL CHECK(expected_cost_minor>=0),
+    counted_qty_milli INTEGER CHECK(counted_qty_milli>=0),
+    added_cost_minor INTEGER CHECK(added_cost_minor>=0),
+    counted_by TEXT REFERENCES users(id),
+    counted_at TEXT
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_count_lines_parent
+    ON stock_count_lines(count_id,product_id)'''
+];

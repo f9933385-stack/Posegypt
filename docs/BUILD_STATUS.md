@@ -87,3 +87,5 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Flutter inventory UI can create and stop offers; POS shows active effective price.
 - **Still missing:** coupons, multibuy, per-branch pricing, loyalty, price lock/review before cash tender, business sign-off and end-device tests.
 - [Arabic promotions guide](PROMOTIONS_AR.md).
+
+- Promotion checkout safety: Flutter now sends `expected_total_minor`; the server rejects a changed price with HTTP 409 and rolls back the sale. The cashier must refresh and re-confirm. A dedicated interactive stale-price dialog is still missing.

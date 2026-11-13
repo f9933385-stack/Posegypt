@@ -165,3 +165,7 @@ Returns still specify **base-unit** `qty_milli` against an immutable original pu
 `POST /api/v1/promotions` accepts `product_id`, optional `unit_id`, `title`, integer `promo_price_minor`, and `starts_at`/`ends_at` UTC timestamps (YYYY-MM-DDTHH:MM:SSZ). Owner/manager only; promotions may not overlap for the same product and unit. `POST /api/v1/promotions/stop` accepts `promotion_id` and `reason`.
 
 Product and unit lookup responses include `effective_sell_price_minor` and `promotion_id` alongside original `sell_price_minor`. The sale endpoint always determines the current effective price server-side at posting time; a cashier cannot override it. Original receipt line amount is immutable for returns. See [Arabic price guide](PROMOTIONS_AR.md).
+
+### Optional cart total lock (promotional price changes)
+
+For sale requests, pass integer `expected_total_minor` equal to the amount the operator approved in the client cart. The server **recomputes** current promotional pricing at the moment of posting and rejects mismatches with HTTP 409, without posting any inventory or financial movement. The latest Flutter POS includes this field by default. Historical integrations omitting it remain backwards compatible, but should add it to prevent stale cart pricing.

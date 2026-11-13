@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:kasher_server/src/store.dart';
+import 'package:kasher_server/src/schema.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -22,6 +23,32 @@ void main() {
     final second=DatabaseStore.open(path);
     expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 2);
     second.dispose();
+  });
+
+  test('existing v1 financial data migrates additively to v2', () {
+    final raw=sqlite3.open(path);
+    try {
+      raw.execute('PRAGMA foreign_keys=ON');
+      for(final sql in schemaV1) {raw.execute(sql);}
+      raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      raw.execute('INSERT INTO schema_version(version) VALUES(1)');
+      raw.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Existing Store','old')");
+      raw.execute("INSERT INTO products(id,tenant_id,sku,name_ar,sell_price_minor,created_at,updated_at) VALUES('P','T','P01','Old Product',500,'old','old')");
+    } finally {
+      raw.dispose();
+    }
+    final migrated=DatabaseStore.open(path);
+    try {
+      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],2);
+      expect(migrated.first("SELECT name_ar FROM products WHERE id='P'")?['name_ar'],'Old Product');
+      expect(migrated.first("SELECT name FROM sqlite_master WHERE name='product_units'")?['name'],
+        'product_units');
+      final columns=migrated.rows('PRAGMA table_info(document_lines)');
+      expect(columns.any((x)=>x['name']=='gross_minor'),isTrue);
+      expect(columns.any((x)=>x['name']=='unit_id'),isTrue);
+    } finally {
+      migrated.dispose();
+    }
   });
 
   test('newer schema is refused without downgrading data', () {

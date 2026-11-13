@@ -56,7 +56,8 @@ Future<void> main(List<String> args) async {
     stderr.writeln('TLS certificate/key could not be read');
     store.dispose();exitCode=2;return;
   }
-  final api=KasherApi(engine,AuthService(store));
+  final api=KasherApi(engine,AuthService(store),
+    enforceDevices:!isLoopbackBind(host));
   final server=await shelf_io.serve(api.handler,host,port,
     securityContext:transport,poweredByHeader:null);
   stdout.writeln('Kasher branch service running at ${transport==null?'http':'https'}://${server.address.host}:${server.port}');

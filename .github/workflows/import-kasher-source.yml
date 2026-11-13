@@ -72,9 +72,26 @@ jobs:
         run: flutter create --project-name kasher_app --platforms=android .
       - name: Harden Android manifest for device secrets
         run: python3 tools/secure_android_manifest.py app/android/app/src/main/AndroidManifest.xml
-      - name: Build Android development APK
+      - name: Cache Gradle dependencies
+        uses: gradle/actions/setup-gradle@v4
+      - name: Build Android development APK (retry transient Maven 429 errors)
         working-directory: app
-        run: flutter build apk --debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if flutter build apk --debug; then
+              echo "Android build completed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Android build failed after three attempts"
+              exit 1
+            fi
+            delay=$((attempt * 45))
+            echo "::warning::Gradle download/build failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: Kasher-Android-development

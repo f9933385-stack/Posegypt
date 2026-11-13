@@ -54,6 +54,43 @@ class ScheduledBackupTest(unittest.TestCase):
         with sqlite3.connect(restored) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM customers").fetchone()[0], 4)
 
+    def test_single_call_creates_verified_local_and_secondary_copy(self):
+        self.remote=self.root / "protected-secondary"
+        self.scratch=self.root / "trusted-scratch"
+        self.remote.mkdir(mode=0o700)
+        self.scratch.mkdir(mode=0o700)
+        result=run_once(self.database,self.backups,self.passphrase,
+                        keep=3,offsite_dir=self.remote,
+                        scratch_dir=self.scratch,offsite_keep=2)
+        self.assertEqual(result['status'],'verified')
+        self.assertEqual(result['offsite']['status'],'verified-offsite-copy')
+        self.assertTrue((self.backups / result['backup']).exists())
+        self.assertEqual((self.backups / result['backup']).read_bytes(),
+                         (self.remote / result['backup']).read_bytes())
+        self.assertEqual(list(self.scratch.iterdir()),[])
+
+    def test_failed_secondary_storage_keeps_existing_local_backups(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import patch
+        self.remote=self.root / "protected-secondary"
+        self.scratch=self.root / "trusted-scratch"
+        self.remote.mkdir(mode=0o700)
+        self.scratch.mkdir(mode=0o700)
+        moment=datetime(2026,11,14,4,0,tzinfo=timezone.utc)
+        initial=run_once(self.database,self.backups,self.passphrase,
+                         keep=2,timestamp=moment)
+        with patch('offsite_backup.mirror_verified_backup',
+                   side_effect=OSError('remote share not accessible')):
+            with self.assertRaisesRegex(OSError,'remote share'):
+                run_once(self.database,self.backups,self.passphrase,
+                         keep=2,timestamp=moment+timedelta(minutes=1),
+                         offsite_dir=self.remote,scratch_dir=self.scratch)
+        files=list(self.backups.glob('*.kasherbak'))
+        self.assertEqual(len(files),2)
+        self.assertTrue((self.backups / initial['backup']).exists(),
+                        'Existing verified local backup may not be pruned')
+        self.assertFalse((self.backups / '.kasher-backup.lock').exists())
+
     def test_failed_restore_never_prunes_prior_good_backup(self):
         good = run_once(self.database, self.backups, self.passphrase)
         path = self.backups / good["backup"]

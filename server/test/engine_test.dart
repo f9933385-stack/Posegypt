@@ -260,6 +260,88 @@ void main() {
     expect(base.single['matched_unit_id'],null);
   });
 
+  test('carton purchase keeps exact gross cost, base inventory and supplier payable', () {
+    final product=call('create_product',{'sku':'PUR-CARTON-1','name_ar':'بسكويت',
+      'sell_price_minor':20});
+    final unit=call('create_product_unit',{'product_id':product['id'],
+      'unit_name':'كرتونة 12','factor_milli':12000,'sell_price_minor':220});
+    final supplier=call('create_supplier',{'name':'مورد الكراتين'});
+    final bought=call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'unit_id':unit['id'],
+        'unit_count':3,'unit_cost_minor':185}],
+      'payments':<Map<String,dynamic>>[]});
+    expect(bought['total_minor'],555);
+    expect(bought['due_minor'],555);
+    final lines=(engine.readDocument(owner,bought['id'] as String)['lines'] as List);
+    final docLine=lines.single;
+    expect(docLine['qty_milli'],36000);
+    expect(docLine['gross_minor'],555);
+    expect(docLine['unit_id'],unit['id']);
+    expect(docLine['unit_count'],3);
+    expect(docLine['unit_price_minor'],185);
+    expect(engine.listStock(owner,branch).single['qty_milli'],36000);
+    expect(engine.listStock(owner,branch).single['cost_minor'],555);
+    expect(engine.dashboard(owner,branch)['stock_value_minor'],555);
+    expect(engine.dashboard(owner,branch)['supplier_payables_minor'],555);
+    final first=call('purchase_return',{'branch_id':branch,'original_id':bought['id'],
+      'lines':[{'original_line_id':docLine['id'],'qty_milli':18000}]});
+    final second=call('purchase_return',{'branch_id':branch,'original_id':bought['id'],
+      'lines':[{'original_line_id':docLine['id'],'qty_milli':18000}]});
+    expect((first['supplier_credit_minor'] as int)+(second['supplier_credit_minor'] as int),555);
+    expect(engine.listStock(owner,branch).single['qty_milli'],0);
+    expect(engine.listStock(owner,branch).single['cost_minor'],0);
+    expect(store.rows('''SELECT e.id,SUM(l.debit_minor-l.credit_minor) AS difference
+      FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id
+      GROUP BY e.id HAVING difference<>0'''),isEmpty);
+  });
+
+  test('carton buying handles bonus and expiry lots without changing invoice total', () {
+    final product=call('create_product',{'sku':'PUR-CARTON-LOT',
+      'name_ar':'حليب مبرد','sell_price_minor':30,'track_expiry':true});
+    final unit=call('create_product_unit',{'product_id':product['id'],
+      'unit_name':'صندوق 6','factor_milli':6000,'sell_price_minor':165});
+    final supplier=call('create_supplier',{'name':'مورد اللبن'});
+    final doc=call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'unit_id':unit['id'],
+        'unit_count':2,'unit_cost_minor':151,'bonus_qty_milli':1000,
+        'lot_no':'MILK-42','expires_on':'2031-10-01'}],
+      'payments':[{'method':'cash','amount_minor':302}]});
+    expect(doc['total_minor'],302);
+    final stock=engine.listStock(owner,branch).single;
+    expect(stock['qty_milli'],13000);
+    expect(stock['cost_minor'],302);
+    final lots=engine.listLots(owner,branch,productId:product['id'] as String);
+    expect(lots.single['qty_milli'],13000);
+    expect(lots.single['lot_no'],'MILK-42');
+    final line=(engine.readDocument(owner,doc['id'] as String)['lines'] as List).single;
+    expect(line['unit_count'],2);
+    expect(line['gross_minor'],302);
+    expect(line['qty_milli'],13000);
+  });
+
+  test('alternate purchase units cannot be applied to another product or double-quantity', () {
+    final first=call('create_product',{'sku':'PUR-UNIT-A','name_ar':'أرز',
+      'sell_price_minor':20});
+    final second=call('create_product',{'sku':'PUR-UNIT-B','name_ar':'مكرونة',
+      'sell_price_minor':20});
+    final unit=call('create_product_unit',{'product_id':first['id'],
+      'unit_name':'كيس 10','factor_milli':10000,'sell_price_minor':180});
+    final supplier=call('create_supplier',{'name':'مورد'});
+    Map<String,dynamic> purchaseLine(Map<String,dynamic> line) =>
+      {'branch_id':branch,'supplier_id':supplier['id'],
+        'lines':[line],'payments':<Map<String,dynamic>>[]};
+    expect(()=>call('purchase',purchaseLine({
+      'product_id':second['id'],'unit_id':unit['id'],
+      'unit_count':1,'unit_cost_minor':150})),throwsA(isA<DomainError>()));
+    expect(()=>call('purchase',purchaseLine({
+      'product_id':first['id'],'unit_id':unit['id'],'qty_milli':1000,
+      'unit_count':1,'unit_cost_minor':150})),throwsA(isA<DomainError>()));
+    expect(()=>call('purchase',purchaseLine({
+      'product_id':first['id'],'unit_count':1,'unit_cost_minor':150
+    })),throwsA(isA<DomainError>()));
+    expect(store.rows("SELECT id FROM documents WHERE kind='purchase'"),isEmpty);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

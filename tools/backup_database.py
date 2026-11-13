@@ -71,7 +71,9 @@ def backup(source: Path, destination: Path, password: str) -> None:
     salt, nonce = secrets.token_bytes(SALT_SIZE), secrets.token_bytes(NONCE_SIZE)
     key = key_from_passphrase(password, salt)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_path = tempfile.mkstemp(prefix=".kasher-", suffix=".sqlite3", dir=str(destination.parent))
+    # Keep the short-lived plaintext SQLite snapshot on the trusted branch host,
+    # NEVER beside the encrypted output (which may be a removable/cloud folder).
+    fd, temp_path = tempfile.mkstemp(prefix=".kasher-", suffix=".sqlite3", dir=str(source.resolve().parent))
     os.close(fd)
     temporary = Path(temp_path)
     partial_fd, partial_name = tempfile.mkstemp(prefix=".kasher-encrypted-", suffix=".partial", dir=str(destination.parent))

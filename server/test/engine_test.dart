@@ -184,6 +184,68 @@ void main() {
     expect(engine.listStock(owner,branch).single['qty_milli'],1000);
   });
 
+  test('carton sale uses exact unit price and returns conserve every piaster', () {
+    final product=call('create_product',{'sku':'CARTON-1','name_ar':'عبوات أرز',
+      'sell_price_minor':15,'barcode':'2212000000000'});
+    final carton=call('create_product_unit',{
+      'product_id':product['id'],'unit_name':'كرتونة 12',
+      'factor_milli':12000,'sell_price_minor':161,
+      'barcode':'2212000000001',
+    });
+    final supplier=call('create_supplier',{'name':'مورد أرز'});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':24000,'unit_cost_minor':10}],
+      'payments':<Map<String,dynamic>>[]});
+    final sold=call('sale',{'branch_id':branch,
+      'lines':[{'product_id':product['id'],'unit_id':carton['id'],'unit_count':1}],
+      'payments':[{'method':'cash','amount_minor':161}]});
+    expect(sold['total_minor'],161);
+    expect(sold['cogs_minor'],120);
+    final document=engine.readDocument(owner,sold['id'] as String);
+    final line=(document['lines'] as List).single;
+    expect(line['gross_minor'],161);
+    expect(line['qty_milli'],12000);
+    expect(line['unit_count'],1);
+    expect(engine.listStock(owner,branch).single['qty_milli'],12000);
+    final first=call('sale_return',{'branch_id':branch,'original_id':sold['id'],
+      'refund_method':'cash','lines':[{'original_line_id':line['id'],'qty_milli':6000}]});
+    final second=call('sale_return',{'branch_id':branch,'original_id':sold['id'],
+      'refund_method':'cash','lines':[{'original_line_id':line['id'],'qty_milli':6000}]});
+    expect((first['total_minor'] as int)+(second['total_minor'] as int),161);
+    expect(engine.listStock(owner,branch).single['qty_milli'],24000);
+    final balances=store.rows('''SELECT e.id, SUM(l.debit_minor-l.credit_minor) AS delta
+      FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id
+      GROUP BY e.id HAVING delta<>0''');
+    expect(balances,isEmpty);
+  });
+
+  test('product unit barcodes cannot collide in either direction', () {
+    final product=call('create_product',{'sku':'UNIT-BC-1','name_ar':'بسكويت',
+      'sell_price_minor':30,'barcode':'1234567890123'});
+    expect(()=>call('create_product_unit',{'product_id':product['id'],
+      'unit_name':'علبة','factor_milli':6000,'sell_price_minor':150,
+      'barcode':'1234567890123'}),throwsA(isA<DomainError>()));
+    final unit=call('create_product_unit',{'product_id':product['id'],
+      'unit_name':'علبة','factor_milli':6000,'sell_price_minor':150,
+      'barcode':'1234567890124'});
+    expect(engine.listProductUnits(owner,product['id'] as String).single['id'],unit['id']);
+    expect(()=>call('create_product',{'sku':'UNIT-BC-2',
+      'name_ar':'شيء آخر','sell_price_minor':5,
+      'barcode':'1234567890124'}),throwsA(isA<DomainError>()));
+  });
+
+  test('a product unit cannot be sold for another product', () {
+    final a=call('create_product',{'sku':'U-A','name_ar':'أ','sell_price_minor':30});
+    final b=call('create_product',{'sku':'U-B','name_ar':'ب','sell_price_minor':30});
+    final unit=call('create_product_unit',{'product_id':a['id'],
+      'unit_name':'كرتونة','factor_milli':12000,'sell_price_minor':300});
+    expect(()=>call('sale',{'branch_id':branch,
+      'lines':[{'product_id':b['id'],'unit_id':unit['id'],'unit_count':1}],
+      'payments':[{'method':'cash','amount_minor':300}]}),
+      throwsA(isA<DomainError>()));
+    expect(store.rows('SELECT id FROM documents WHERE kind=?',['sale']),isEmpty);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

@@ -49,6 +49,133 @@ class _ProductsState extends State<ProductsPage> {
     try {await widget.api.post('products',result);if(mounted){alert(context,'تمت إضافة الصنف');_reload();}}
     catch(e){if(mounted)alert(context,'تعذر الإضافة: $e',error:true);}
   }
+  Future<void> _managePromotions(Map<String,dynamic> product) async {
+    if(!['owner','manager'].contains(widget.role)) {
+      alert(context,'العروض يحددها المدير فقط',error:true);
+      return;
+    }
+    try {
+      final offers=await widget.api.list('promotions',
+        {'product_id':product['id'].toString()});
+      final units=await widget.api.list('units',
+        {'product_id':product['id'].toString()});
+      if(!mounted)return;
+      await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('العروض المجدولة: '+product['name_ar'].toString()),
+        content:SizedBox(width:560,height:360,child:offers.isEmpty
+          ?const Center(child:Text('لا توجد عروض لهذا الصنف'))
+          :ListView(children:[
+            for(final offer in offers)ListTile(
+              title:Text(offer['title'].toString()+' • '+
+                money(asInt(offer['promo_price_minor']))),
+              subtitle:Text(offer['starts_at'].toString()+' ← '+offer['ends_at'].toString()+
+                (offer['unit_id']!=null?' • وحدة بديلة':'')),
+              trailing:offer['active']==1
+                ?TextButton(onPressed:() async {
+                  Navigator.pop(ctx);
+                  await _stopPromotion(offer);
+                },child:const Text('إيقاف العرض'))
+                :const Text('متوقف'),
+            ),
+          ])),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إغلاق')),
+          FilledButton(onPressed:(){
+            Navigator.pop(ctx);
+            _createPromotion(product,units);
+          },child:const Text('إضافة عرض جديد')),
+        ],
+      ));
+    }catch(e){if(mounted)alert(context,'تعذر تحميل العروض: '+e.toString(),error:true);}
+  }
+
+  Future<void> _stopPromotion(Map<String,dynamic> offer) async {
+    final reason=TextEditingController();
+    try {
+      final confirmed=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+        title:const Text('إيقاف العرض'),
+        content:TextField(controller:reason,
+          decoration:const InputDecoration(labelText:'سبب الإيقاف')),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(ctx,false),
+            child:const Text('إلغاء')),
+          FilledButton(onPressed:(){
+            if(reason.text.trim().isNotEmpty)Navigator.pop(ctx,true);
+          },child:const Text('إيقاف')),
+        ],
+      ));
+      if(confirmed!=true)return;
+      await widget.api.post('promotions/stop',
+        {'promotion_id':offer['id'],'reason':reason.text.trim()});
+      if(mounted){alert(context,'تم إيقاف العرض');_reload();}
+    }catch(e){if(mounted)alert(context,'تعذر إيقاف العرض: '+e.toString(),error:true);}
+    finally{reason.dispose();}
+  }
+
+  Future<void> _createPromotion(Map<String,dynamic> product,
+      List<Map<String,dynamic>> units) async {
+    final title=TextEditingController(),price=TextEditingController();
+    final now=DateTime.now().toUtc();
+    final start=TextEditingController(
+      text:now.toIso8601String().substring(0,19)+'Z');
+    final end=TextEditingController(
+      text:now.add(const Duration(days:7)).toIso8601String().substring(0,19)+'Z');
+    String? unitId;
+    try {
+      final result=await showDialog<Map<String,dynamic>>(context:context,
+        builder:(ctx)=>StatefulBuilder(builder:(ctx,setForm)=>AlertDialog(
+          title:const Text('إضافة عرض سعر محدد المدة'),
+          content:SizedBox(width:480,child:SingleChildScrollView(child:Column(
+            mainAxisSize:MainAxisSize.min,children:[
+              const Text('الخصم يطبقه الخادم تلقائيًا، ولا يمكن تداخل عرضين لنفس وحدة البيع.'),
+              const SizedBox(height:12),
+              TextField(controller:title,
+                decoration:const InputDecoration(labelText:'اسم العرض')),
+              const SizedBox(height:12),
+              DropdownButtonFormField<String>(
+                isExpanded:true,
+                decoration:const InputDecoration(labelText:'وحدة البيع'),
+                initialValue:unitId,
+                items:[
+                  const DropdownMenuItem<String>(value:null,child:Text('وحدة الأساس')),
+                  for(final u in units)DropdownMenuItem<String>(
+                    value:u['id'].toString(),child:Text(u['unit_name'].toString())),
+                ],
+                onChanged:(v)=>setForm(()=>unitId=v),
+              ),
+              const SizedBox(height:12),
+              TextField(controller:price,keyboardType:TextInputType.number,
+                decoration:const InputDecoration(labelText:'السعر الترويجي بالجنيه')),
+              const SizedBox(height:12),
+              TextField(controller:start,textDirection:TextDirection.ltr,
+                decoration:const InputDecoration(labelText:'البداية UTC YYYY-MM-DDTHH:MM:SSZ')),
+              const SizedBox(height:12),
+              TextField(controller:end,textDirection:TextDirection.ltr,
+                decoration:const InputDecoration(labelText:'النهاية UTC YYYY-MM-DDTHH:MM:SSZ')),
+            ]))),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
+            FilledButton(onPressed:(){
+              try {
+                final amount=parseMoney(price.text);
+                if(amount<=0 || title.text.trim().isEmpty)throw const FormatException();
+                Navigator.pop(ctx,{'product_id':product['id'],
+                  if(unitId!=null)'unit_id':unitId,
+                  'title':title.text.trim(),'promo_price_minor':amount,
+                  'starts_at':start.text.trim(),'ends_at':end.text.trim()});
+              }catch(_){alert(ctx,'تحقق من اسم العرض والسعر والتواريخ',error:true);}
+            },child:const Text('حفظ العرض')),
+          ],
+        )));
+      if(result==null)return;
+      await widget.api.post('promotions',result);
+      if(mounted){alert(context,'تم إنشاء العرض وسيسري في موعده');_reload();}
+    }catch(e){if(mounted)alert(context,'تعذر إنشاء العرض: '+e.toString(),error:true);}
+    finally {
+      for(final c in [title,price,start,end]){c.dispose();}
+    }
+  }
+
   Future<void> _createUnit(Map<String,dynamic> product) async {
     final name=TextEditingController(),factor=TextEditingController(text:'12'),
       price=TextEditingController(),barcode=TextEditingController();
@@ -249,6 +376,9 @@ class _ProductsState extends State<ProductsPage> {
             trailing:Row(mainAxisSize:MainAxisSize.min,children:[Text(money(asInt(p['sell_price_minor']))),
               if(p['track_expiry']==1)IconButton(onPressed:()=>_showLots(p),
                 tooltip:'عرض التشغيلات والصلاحية',icon:const Icon(Icons.event_note)),
+              if(['owner','manager'].contains(widget.role))
+                IconButton(onPressed:()=>_managePromotions(p),tooltip:'العروض المجدولة',
+                  icon:const Icon(Icons.local_offer_outlined)),
               IconButton(onPressed:()=>_createUnit(p),tooltip:'إضافة وحدة بيع (كرتونة/علبة)',
                 icon:const Icon(Icons.all_inbox_outlined)),
               IconButton(onPressed:()=>_adjust(p),tooltip:'تسوية المخزون',icon:const Icon(Icons.tune))])));});

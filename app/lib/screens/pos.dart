@@ -9,7 +9,9 @@ class CartLine {
   int qtyMilli;
   int unitCount;
   CartLine(this.product,{this.qtyMilli=1000,this.unit,this.unitCount=1});
-  int get price=>asInt(unit?['sell_price_minor'] ?? product['sell_price_minor']);
+  int get price=>asInt(unit?['effective_sell_price_minor'] ??
+    product['effective_sell_price_minor'] ?? unit?['sell_price_minor'] ??
+    product['sell_price_minor']);
   int get net=>unit==null ? (price*qtyMilli+500)~/1000 : price*unitCount;
   int get tax=>(net*asInt(product['tax_rate_bp'])+5000)~/10000;
   Map<String,dynamic> toSaleLine()=>unit==null
@@ -82,7 +84,8 @@ class _PosState extends State<PosPage> {
               ListTile(title:Text(entry['unit_name'].toString()),
                 subtitle:Text('تعادل '+quantity(asInt(entry['factor_milli']))+
                   ' '+product['base_unit'].toString()),
-                trailing:Text(money(asInt(entry['sell_price_minor']))),
+                trailing:Text(money(asInt(entry['effective_sell_price_minor'] ??
+                  entry['sell_price_minor']))),
                 onTap:()=>Navigator.pop(ctx,entry)),
           ]))),
         actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء'))],
@@ -140,7 +143,12 @@ class _PosState extends State<PosPage> {
         ListView.builder(itemCount:list.length,itemBuilder:(context,i){final p=list[i];return Card(child:ListTile(
           title:Text(p['name_ar']?.toString()??''),subtitle:Text('${p['sku']} • ${p['base_unit']}'),
           trailing:Row(mainAxisSize:MainAxisSize.min,children:[
-            Text(money(asInt(p['sell_price_minor'])),style:const TextStyle(fontWeight:FontWeight.bold)),
+            Column(mainAxisSize:MainAxisSize.min,children:[
+              Text(money(asInt(p['effective_sell_price_minor'] ?? p['sell_price_minor'])),
+                style:const TextStyle(fontWeight:FontWeight.bold)),
+              if(p['promotion_id']!=null)const Text('عرض ترويجي',
+                style:TextStyle(fontSize:10,color:Colors.green)),
+            ]),
             IconButton(onPressed:()=>_addUnit(p),tooltip:'بيع بالكرتونة أو الوحدة',
               icon:const Icon(Icons.all_inbox_outlined)),
             IconButton(onPressed:()=>_add(p),tooltip:'إضافة بوحدة الأساس',

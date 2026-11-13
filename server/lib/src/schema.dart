@@ -248,3 +248,36 @@ const schemaV5 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_count_lines_parent
     ON stock_count_lines(count_id,product_id)'''
 ];
+
+
+/// V6: per-device enrollment credentials and revocable bearer-session binding.
+/// Pairing tickets are one-time, short-lived and only ever stored as SHA-256.
+const schemaV6 = <String>[
+  '''CREATE TABLE IF NOT EXISTS registered_devices (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    name TEXT NOT NULL,
+    secret_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT,
+    revoked_by TEXT REFERENCES users(id),
+    revoked_at TEXT
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_registered_devices_branch
+    ON registered_devices(tenant_id,branch_id,active)''',
+  '''CREATE TABLE IF NOT EXISTS device_pairing_tickets (
+    token_hash TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    claimed_at TEXT
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_device_tickets_tenant_expiry
+    ON device_pairing_tickets(tenant_id,expires_at)''',
+  '''ALTER TABLE sessions ADD COLUMN device_id TEXT REFERENCES registered_devices(id)'''
+];

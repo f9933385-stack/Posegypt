@@ -58,9 +58,10 @@ void main() {
         headers:{'authorization':'Bearer '+credential,
           'idempotency-key':'http-stocktake-'+(counter++).toString()+'-unique-123456789'},
         body:data);
+      final raw=await response.readAsString();
       expect(response.statusCode,201,
-        reason:'Expected HTTP 201 for '+route+'; body: '+await response.readAsString());
-      return Map<String,dynamic>.from(jsonDecode(await response.readAsString()) as Map);
+        reason:'Expected HTTP 201 for '+route+'; body: '+raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
     }
 
     final product=await post('products',admin,{

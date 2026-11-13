@@ -6,7 +6,9 @@ import '../widgets/common.dart';
 class ProductsPage extends StatefulWidget {
   final ApiClient api;
   final String branchId;
-  const ProductsPage({super.key,required this.api,required this.branchId});
+  final String role;
+  const ProductsPage({super.key,required this.api,required this.branchId,
+    this.role='viewer'});
   @override State<ProductsPage> createState()=>_ProductsState();
 }
 class _ProductsState extends State<ProductsPage> {
@@ -87,6 +89,40 @@ class _ProductsState extends State<ProductsPage> {
     }catch(e){if(mounted)alert(context,'تعذر إضافة الوحدة: $e',error:true);}
   }
 
+  Future<void> _changeLotQuarantine(BuildContext lotDialogContext,
+      Map<String,dynamic> lot,bool block) async {
+    final reason=TextEditingController();
+    try {
+      final submitted=await showDialog<String>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text(block?'حجر تشغيلة':'رفع الحجر عن تشغيلة'),
+        content:SizedBox(width:430,child:Column(mainAxisSize:MainAxisSize.min,children:[
+          Text('التشغيلة: '+lot['lot_no'].toString()),
+          const SizedBox(height:12),
+          TextField(controller:reason,maxLength:200,
+            decoration:const InputDecoration(labelText:'سبب القرار (مطلوب للتدقيق)')),
+        ])),
+        actions:[
+          TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
+          FilledButton(onPressed:(){
+            if(reason.text.trim().isNotEmpty)Navigator.pop(ctx,reason.text.trim());
+          },child:Text(block?'اعتماد الحجز':'اعتماد رفع الحجز')),
+        ],
+      ));
+      if(submitted==null)return;
+      await widget.api.post('lots/quarantine',{
+        'branch_id':widget.branchId,
+        'warehouse_id':lot['warehouse_id'],
+        'batch_id':lot['id'],
+        'quarantined':block,
+        'reason':submitted,
+      });
+      if(lotDialogContext.mounted)Navigator.pop(lotDialogContext);
+      if(mounted)alert(context,block?'تم حجز التشغيلة ومنع بيعها':'تم رفع الحجر بعد الاعتماد');
+    }catch(e){
+      if(mounted)alert(context,'تعذر تعديل حالة التشغيلة: '+e.toString(),error:true);
+    }finally{reason.dispose();}
+  }
+
   Future<void> _showLots(Map<String,dynamic> product) async {
     try {
       final lots=await widget.api.list('lots',{
@@ -98,14 +134,25 @@ class _ProductsState extends State<ProductsPage> {
           ?const Center(child:Text('لا توجد تشغيلات مسجلة لهذا الصنف'))
           :ListView.builder(itemCount:lots.length,itemBuilder:(ctx,i){
             final lot=lots[i],expired=lot['expired']==true;
-            return ListTile(leading:Icon(expired?Icons.warning_amber:Icons.event_available,
-                color:expired?Colors.red:null),
+            final quarantined=lot['quarantined']==true;
+            final mayBlock=['owner','manager','stock'].contains(widget.role);
+            final mayRelease=['owner','manager'].contains(widget.role);
+            return ListTile(
+              leading:Icon(expired || quarantined?Icons.warning_amber:Icons.event_available,
+                color:expired || quarantined?Colors.red:null),
               title:Text('التشغيلة: '+lot['lot_no'].toString()),
-              subtitle:Text('ينتهي: '+lot['expires_on'].toString()),
-              trailing:Column(mainAxisSize:MainAxisSize.min,children:[
-                Text(quantity(asInt(lot['qty_milli']))),
-                Text(expired?'منتهية':'صالحة للبيع',
-                  style:TextStyle(color:expired?Colors.red:Colors.green,fontSize:11)),
+              subtitle:Text('ينتهي: '+lot['expires_on'].toString()+
+                (quarantined?' • محجوزة للبيع':'')),
+              trailing:Row(mainAxisSize:MainAxisSize.min,children:[
+                Column(mainAxisSize:MainAxisSize.min,children:[
+                  Text(quantity(asInt(lot['qty_milli']))),
+                  Text(expired?'منتهية':quarantined?'محجوزة':'صالحة للبيع',
+                    style:TextStyle(color:expired||quarantined?Colors.red:Colors.green,fontSize:11)),
+                ]),
+                if((quarantined && mayRelease) || (!quarantined && mayBlock))
+                  IconButton(onPressed:()=>_changeLotQuarantine(ctx,lot,!quarantined),
+                    tooltip:quarantined?'رفع الحجر':'حجر التشغيلة',
+                    icon:Icon(quarantined?Icons.lock_open:Icons.lock_outline)),
               ]));
           })),
         actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إغلاق'))],

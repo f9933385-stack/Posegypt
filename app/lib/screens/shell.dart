@@ -59,7 +59,7 @@ class _ShellScreenState extends State<ShellScreen> {
   Widget _page()=>switch(selected) {
     0=>DashboardPage(api:widget.api,branchId:branchId),
     1=>PosPage(api:widget.api,branchId:branchId),
-    2=>ProductsPage(api:widget.api,branchId:branchId),
+    2=>ProductsPage(api:widget.api,branchId:branchId,role:role),
     3=>PurchasesPage(api:widget.api,branchId:branchId),
     4=>PartyPage(api:widget.api,customer:true),
     5=>PartyPage(api:widget.api,customer:false),

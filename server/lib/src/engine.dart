@@ -706,6 +706,12 @@ class PosEngine {
       subtotal+=gross; discount+=disc; tax+=vat;
     }
     final total=subtotal-discount+tax, payments=_payments(input);
+    if(input.containsKey('expected_total_minor')) {
+      final expected=strictInt(input['expected_total_minor'],'expected_total_minor');
+      if(expected!=total) {
+        throw DomainError('Sale total changed since cart review; refresh and confirm the final price',409);
+      }
+    }
     final paid=payments.fold<int>(0,(s,x)=>s+(x['amount_minor'] as int));
     if(paid>total) throw DomainError('Payment exceeds sale total');
     if(paid<total && customer==null) throw DomainError('Credit sale requires customer');

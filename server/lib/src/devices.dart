@@ -54,7 +54,7 @@ class DeviceRegistry {
     });
   }
 
-  Map<String,Object?> claim(String code,String label) {
+  Map<String,Object?> claim(String code,String label,{String? expectedTenant}) {
     if(code.length<24 || code.length>128) {
       throw DomainError('Invalid or expired device pairing code',401);
     }
@@ -64,7 +64,9 @@ class DeviceRegistry {
       final ticket=store.first('''SELECT * FROM device_pairing_tickets
         WHERE token_hash=? AND claimed_at IS NULL AND expires_at>?''',
         [hashToken(code),_now()]);
-      if(ticket==null) throw DomainError('Invalid or expired device pairing code',401);
+      if(ticket==null || (expectedTenant!=null && ticket['tenant_id']!=expectedTenant)) {
+        throw DomainError('Invalid or expired device pairing code',401);
+      }
       final id=secureToken(18),secret=secureToken(32),now=_now();
       store.exec('''INSERT INTO registered_devices
         (id,tenant_id,branch_id,name,secret_hash,created_by,created_at)

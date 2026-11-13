@@ -43,14 +43,19 @@ class _LoginScreenState extends State<LoginScreen> {
         const SnackBar(content:Text('أدخل رمز الاقتران واسم الجهاز')));
       return;
     }
-    if(!form.currentState!.validate())return;
+    if(tenant.text.trim().isEmpty) {
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content:Text('أدخل معرف المنشأة قبل الاقتران')));
+      return;
+    }
     setState(()=>loading=true);
     try {
       final endpoint=validateBranchEndpoint(host.text.trim());
       final tenantId=tenant.text.trim();
       final client=ApiClient(endpoint);
       final response=await client.post('devices/claim',{
-        'pairing_code':code,'device_name':name},idempotent:false);
+        'pairing_code':code,'device_name':name,
+        'tenant_id':tenantId},idempotent:false);
       if(response['tenant_id']!=tenantId) {
         throw const FormatException('رمز الإقران تابع لمنشأة أخرى');
       }

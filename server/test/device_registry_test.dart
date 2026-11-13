@@ -30,7 +30,9 @@ void main() {
     expect(code.length,greaterThanOrEqualTo(24));
     expect(store.rows('SELECT token_hash FROM device_pairing_tickets').single['token_hash'],
       isNot(code));
-    final paired=registry.claim(code,'كاشير 1');
+    expect(()=>registry.claim(code,'wrong',expectedTenant:'another-tenant'),
+      throwsA(isA<DomainError>()));
+    final paired=registry.claim(code,'كاشير 1',expectedTenant:bootstrap['tenant_id'] as String);
     expect(paired['device_secret'],isNotEmpty);
     final rows=store.rows('SELECT * FROM registered_devices');
     expect(rows.length,1);
@@ -95,7 +97,7 @@ void main() {
     expect(ticketResponse.statusCode,201);
     final ticket=(jsonDecode(await ticketResponse.readAsString()) as Map)['pairing_code'] as String;
     final claim=await call(remote,'POST','/api/v1/devices/claim',
-      body:{'pairing_code':ticket,'device_name':'اختبار HTTPS جهاز 1'});
+      body:{'pairing_code':ticket,'device_name':'اختبار HTTPS جهاز 1','tenant_id':tenant});
     expect(claim.statusCode,201);
     final dev=jsonDecode(await claim.readAsString()) as Map;
     final login=await call(remote,'POST','/api/v1/auth/login',
@@ -114,7 +116,7 @@ void main() {
     expect(revoked.statusCode,201);
     expect((await call(remote,'GET','/api/v1/me',token:bound)).statusCode,401);
     final repeat=await call(remote,'POST','/api/v1/devices/claim',
-      body:{'pairing_code':ticket,'device_name':'جهاز آخر'});
+      body:{'pairing_code':ticket,'device_name':'جهاز آخر','tenant_id':tenant});
     expect(repeat.statusCode,401);
   });
 }

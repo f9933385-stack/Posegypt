@@ -76,11 +76,13 @@ class KasherApi {
     });
     router.post('/api/v1/devices/claim',(Request r) async {
       final body=await _body(r);
-      if(body['pairing_code'] is! String || body['device_name'] is! String) {
+      if(body['pairing_code'] is! String || body['device_name'] is! String ||
+          body['tenant_id'] is! String) {
         throw DomainError('Pairing code and device name required',400);
       }
       return _json(devices.claim(body['pairing_code'] as String,
-        body['device_name'] as String),status:201);
+        body['device_name'] as String,
+        expectedTenant:body['tenant_id'] as String),status:201);
     });
     router.get('/api/v1/devices',(Request r)=>
       _json(devices.list(_p(r),_branch(r))));

@@ -15,6 +15,7 @@ import 'users.dart';
 import 'shifts.dart';
 import 'warehouses.dart';
 import 'stock_counts.dart';
+import 'devices.dart';
 
 class ShellScreen extends StatefulWidget {
   final ApiClient api;
@@ -27,11 +28,11 @@ class _ShellScreenState extends State<ShellScreen> {
   String get role => widget.session['role']?.toString() ?? 'viewer';
   late String branchId;
   List<Map<String,dynamic>> branches=[];
-  final pageTitles=['الرئيسية','نقطة البيع','الأصناف والمخزون','المشتريات','العملاء','الموردون','الديون والتحصيل','التجهيز','المرتجعات','المصروفات','التقارير','المستخدمون','الورديات','المخازن الداخلية','الجرد المعتمد'];
+  final pageTitles=['الرئيسية','نقطة البيع','الأصناف والمخزون','المشتريات','العملاء','الموردون','الديون والتحصيل','التجهيز','المرتجعات','المصروفات','التقارير','المستخدمون','الورديات','المخازن الداخلية','الجرد المعتمد','أجهزة الكاشير'];
   final pageIcons=[Icons.dashboard_outlined,Icons.point_of_sale_outlined,Icons.inventory_2_outlined,
     Icons.shopping_cart_outlined,Icons.groups_outlined,Icons.local_shipping_outlined,
     Icons.account_balance_wallet_outlined,Icons.blender_outlined,Icons.assignment_return_outlined,
-    Icons.receipt_long_outlined,Icons.bar_chart_outlined,Icons.manage_accounts_outlined,Icons.access_time_outlined,Icons.warehouse_outlined,Icons.fact_check_outlined];
+    Icons.receipt_long_outlined,Icons.bar_chart_outlined,Icons.manage_accounts_outlined,Icons.access_time_outlined,Icons.warehouse_outlined,Icons.fact_check_outlined,Icons.devices_outlined];
   @override void initState(){super.initState();selected=switch(role){'cashier'=>1,'stock'=>2,'purchasing'=>3,'viewer'=>10,_=>0};branchId=widget.session['branch_id']?.toString() ?? '';_loadBranches();}
   Future<void> _loadBranches() async {
     try {
@@ -73,6 +74,7 @@ class _ShellScreenState extends State<ShellScreen> {
     12=>ShiftsPage(api:widget.api,branchId:branchId),
     13=>WarehousesPage(api:widget.api,branchId:branchId,role:role),
     14=>StockCountsPage(api:widget.api,branchId:branchId,role:role),
+    15=>DevicesPage(api:widget.api,branchId:branchId),
     _=>DashboardPage(api:widget.api,branchId:branchId),
   };
   @override Widget build(BuildContext context)=>LayoutBuilder(builder:(context,box){

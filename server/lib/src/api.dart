@@ -106,6 +106,11 @@ class KasherApi {
     router.get('/api/v1/users', (Request r)=>_json(engine.listUsers(_p(r))));
     router.get('/api/v1/branches', (Request r)=>_json(engine.listBranches(_p(r))));
     router.get('/api/v1/warehouses', (Request r)=>_json(engine.listWarehouses(_p(r),_branch(r))));
+    router.get('/api/v1/branch-shipments', (Request r)=>
+      _json(engine.listBranchShipments(_p(r),_branch(r))));
+    router.get('/api/v1/branch-shipments/<id>', (Request r,String id)=>
+      _json(engine.readBranchShipment(_p(r),id)));
+
     router.get('/api/v1/promotions', (Request r)=>
       _json(engine.listPromotions(_p(r),r.url.queryParameters['product_id'] ?? '')));
     router.get('/api/v1/units', (Request r)=>_json(engine.listProductUnits(_p(r),
@@ -130,6 +135,9 @@ class KasherApi {
       'promotions':'create_promotion','promotions/stop':'stop_promotion',
       'users':'create_user','products':'create_product','units':'create_product_unit','customers':'create_customer','suppliers':'create_supplier',
       'branches':'create_branch','warehouses':'create_warehouse',
+      'branch-shipments/dispatch':'branch_shipment_dispatch',
+      'branch-shipments/receive':'branch_shipment_receive',
+      'branch-shipments/cancel':'branch_shipment_cancel',
       'inventory/transfers':'transfer_warehouse','lots/quarantine':'set_lot_quarantine','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
       'purchases/returns':'purchase_return','customers/receipts':'customer_receipt',
       'suppliers/payments':'supplier_payment','expenses':'expense',

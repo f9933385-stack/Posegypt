@@ -114,6 +114,36 @@ void main() {
     expect(engine.listStock(owner,branch).single['qty_milli'],2000);
   });
 
+  test('quarantine blocks FEFO, staff may block but only manager can release', () {
+    final p=product('QUARANTINE'),sup=supplier();
+    purchase(p['id'] as String,sup['id'] as String,2000,'RECALLED','2030-01-01');
+    purchase(p['id'] as String,sup['id'] as String,3000,'SAFE','2031-01-01');
+    final first=engine.listLots(owner,branch,productId:p['id'] as String).first;
+    final user=op('create_user',{'branch_id':branch,'role':'stock',
+      'username':'stock-user','password':'strong-pass-for-stock-user'});
+    final staff=Principal(user['id'] as String,owner.tenantId,branch,'stock','stock-user');
+    final request={'branch_id':branch,'warehouse_id':warehouse,
+      'batch_id':first['id'],'quarantined':true,'reason':'فحص جودة'};
+    engine.command(staff,'set_lot_quarantine',request,
+      'stock-quarantine-key-12345678900000');
+    final rows=engine.listLots(owner,branch,productId:p['id'] as String);
+    expect(rows.first['quarantined'],true);
+    expect(rows.first['sellable_qty_milli'],0);
+    expect(()=>engine.command(staff,'set_lot_quarantine',{
+      ...request,'quarantined':false},'stock-release-denied-123456789000'),
+      throwsA(isA<DomainError>()));
+    final sold=sale(p['id'] as String,3000);
+    expect(sold['total_minor'],600);
+    expect(engine.listLots(owner,branch,productId:p['id'] as String)
+      .map((x)=>x['qty_milli']).toList(),[2000,0]);
+    expect(()=>sale(p['id'] as String,1000),throwsA(isA<DomainError>()));
+    op('set_lot_quarantine',{...request,'quarantined':false,
+      'reason':'نتيجة الفحص سليمة'});
+    expect(engine.listLots(owner,branch,productId:p['id'] as String).first['quarantined'],false);
+    expect(sale(p['id'] as String,1000)['total_minor'],200);
+    expect(store.rows("SELECT action FROM audit_logs WHERE action LIKE 'lot.%'").length,2);
+  });
+
   test('preparation does not silently discard tracked provenance',() {
     final p=product('TRACKED-PREP'), sup=supplier();
     final output=op('create_product',{'sku':'OUT','name_ar':'مُجهّز','sell_price_minor':350});

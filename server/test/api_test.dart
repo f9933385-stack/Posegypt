@@ -112,6 +112,71 @@ void main() {
       GROUP BY e.id HAVING SUM(l.debit_minor-l.credit_minor)<>0'''),isEmpty);
   });
 
+  test('HTTP inter-branch shipment needs independent destination manager',() async {
+    final admin=await token();
+    var n=0;
+    Future<Map<String,dynamic>> post(String route,String credential,
+        Map<String,dynamic> body) async {
+      final response=await send('POST','/api/v1/'+route,
+        headers:{'authorization':'Bearer '+credential,
+          'idempotency-key':'api-shipment-test-'+(n++).toString()+'-unique-12345678'},
+        body:body);
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:'POST '+route+' returned '+raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+
+    final branch2=await post('branches',admin,{'name':'مخزن شرق',
+      'code':'BR22'});
+    final secondBranch=branch2['id'] as String;
+    final destinationWh=branch2['warehouse_id'] as String;
+    await post('users',admin,{'branch_id':secondBranch,'username':'delivery-manager',
+      'password':'delivery-manager-strong-123','role':'manager'});
+    final login=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'delivery-manager',
+      'password':'delivery-manager-strong-123'});
+    expect(login.statusCode,200);
+    final manager=(jsonDecode(await login.readAsString()) as Map)['token'] as String;
+    final product=await post('products',admin,{'sku':'SHIP-HTTP-1',
+      'name_ar':'صنف تحويل','sell_price_minor':300});
+    final supplier=await post('suppliers',admin,{'name':'مورد التحويل'});
+    await post('purchases',admin,{'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':6000,'unit_cost_minor':100}],
+      'payments':<Map<String,dynamic>>[]});
+    final dispatched=await post('branch-shipments/dispatch',admin,{
+      'source_branch_id':setup['branch_id'],
+      'destination_branch_id':secondBranch,
+      'source_warehouse_id':setup['warehouse_id'],
+      'destination_warehouse_id':destinationWh,
+      'product_id':product['id'],'qty_milli':2500,
+    });
+    expect(dispatched['status'],'in_transit');
+
+    final listed=await send('GET',
+      '/api/v1/branch-shipments?branch_id='+secondBranch,
+      headers:{'authorization':'Bearer '+manager});
+    expect(listed.statusCode,200);
+    final shipments=jsonDecode(await listed.readAsString()) as List;
+    expect(shipments.length,1);
+    expect((shipments.single as Map)['status'],'in_transit');
+    final forbidden=await send('POST','/api/v1/branch-shipments/receive',
+      headers:{'authorization':'Bearer '+admin,
+        'idempotency-key':'shipment-self-receipt-denied-1234567'},
+      body:{'shipment_id':dispatched['id']});
+    expect(forbidden.statusCode,403);
+
+    final received=await post('branch-shipments/receive',manager,{
+      'shipment_id':dispatched['id']});
+    expect(received['status'],'received');
+    final destination=await send('GET','/api/v1/stock?branch_id='+secondBranch,
+      headers:{'authorization':'Bearer '+admin});
+    expect(destination.statusCode,200);
+    final stock=(jsonDecode(await destination.readAsString()) as List).single as Map;
+    expect(stock['qty_milli'],2500);
+    expect(stock['cost_minor'],250);
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

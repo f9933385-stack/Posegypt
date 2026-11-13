@@ -105,3 +105,7 @@ conversion in purchasing and expiry-lot tracking are not part of this migration.
 Perishable products with `track_expiry=true` require a named lot and a valid expiry date for new purchases. Sales consume only unexpired lot quantities in earliest-expiry-first order. Returned sales restore the original sold batch identities; suppliers are returned only the original purchased lot. Tracked warehouse movements stay within a single branch. The API rejects tracked preparation until lot-preserving production is implemented.
 
 Read [the Arabic lot and expiry policy](EXPIRY_LOTS_AR.md) before use. Existing unbatched tracked stock requires a documented reconciliation; the server does **not** manufacture fake lot history.
+
+## Lot quarantine (schema v4)
+
+`POST /api/v1/lots/quarantine` requires `branch_id`, `warehouse_id`, `batch_id`, `quarantined` (boolean), and nonempty `reason`. Stock managers may **quarantine**, but only owner/manager may **release**. Changes are audited, idempotent, and added to the local sync outbox. Quarantined batches are excluded from FEFO sale/transfer but remain in physical inventory balances. This is **not a full recall or legal quarantine management system**.

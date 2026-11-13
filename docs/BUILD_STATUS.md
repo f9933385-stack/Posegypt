@@ -44,3 +44,8 @@ The Android debug build needs an isolated test LAN setup with a reachable branch
 - A separate batch movement ledger is audited against tracked warehouse stock and includes original document-line references.
 - Expired stock cannot be sold, while returned expired stock stays outside FEFO sale availability.
 - **Not yet complete:** recalls, quarantine workflows, automatic expired-write-off with approvals, lot-aware preparation and fully verified stocktakes; refer to [expiry lot restrictions](EXPIRY_LOTS_AR.md).
+
+### Lot quarantine (schema v4)
+- Authorized warehouse stock staff can block a lot from FEFO sale/transfer, with a required reason and audit event.
+- Only owner/manager can release the lot; physical stock balances remain unchanged.
+- Full recall workflow, disposal certificates, supplier notifications, temperature logs and separate sellable/unsellable warehouses remain unfinished.

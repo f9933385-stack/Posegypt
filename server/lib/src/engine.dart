@@ -67,6 +67,12 @@ class PosEngine {
         final productId=_id(), now=_now();
         final sku=nonEmpty(input['sku'],'sku');
         final barcode=input['barcode'] == null || input['barcode']=='' ? null : nonEmpty(input['barcode'],'barcode');
+        if(barcode!=null &&
+            store.first('''SELECT u.id FROM product_units u
+              JOIN products p ON p.id=u.product_id
+              WHERE p.tenant_id=? AND u.barcode=?''',[p.tenantId,barcode])!=null) {
+          throw DomainError('Barcode already assigned to a product unit',409);
+        }
         final price=strictInt(input['sell_price_minor'],'sell_price_minor');
         store.exec('''INSERT INTO products(id,tenant_id,sku,barcode,name_ar,name_en,category,base_unit,
           sell_price_minor,reorder_qty_milli,tax_rate_bp,track_expiry,created_at,updated_at)

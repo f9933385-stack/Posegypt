@@ -30,10 +30,12 @@ SecurityContext? branchTransport({
     throw const FormatException('Non-loopback branch server requires TLS certificate and key');
   }
   if(!hasCert) return null;
-  if(!File(cert).isFileSync() || !File(key).isFileSync()) {
+  final certFile=File(cert!);
+  final keyFile=File(key!);
+  if(!certFile.existsSync() || !keyFile.existsSync()) {
     throw const FormatException('TLS certificate or private key file is missing');
   }
-  if(File(cert).lengthSync()==0 || File(key).lengthSync()==0) {
+  if(certFile.lengthSync()==0 || keyFile.lengthSync()==0) {
     throw const FormatException('TLS certificate or private key file is empty');
   }
   final context=SecurityContext(withTrustedRoots:false)

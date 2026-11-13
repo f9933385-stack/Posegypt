@@ -78,8 +78,8 @@ void main() {
     final remote=KasherApi(engine,auth,enforceDevices:true);
     final local=KasherApi(engine,auth);
     Future<Response> call(KasherApi api,String verb,String path,
-      {Map<String,dynamic>? body,String? token}) =>
-      api.handler(Request(verb,Uri.parse('https://localhost'+path),
+      {Map<String,dynamic>? body,String? token}) async =>
+      await api.handler(Request(verb,Uri.parse('https://localhost'+path),
         headers:{if(body!=null)'content-type':'application/json',
           if(token!=null)'authorization':'Bearer '+token},
         body:body==null?null:jsonEncode(body)));

@@ -20,7 +20,7 @@ contains `start_windows.ps1` if the launch script is present in the source commi
 ## Critical exclusions before production
 The project is **not** ready for a real supermarket, despite green builds.
 Remaining blockers include branch-to-cloud sync and conflict reconciliation;
-separate-branch transfer dispatch and receipt; TLS/pairing for LAN devices;
+separate-branch transfer dispatch and receipt; managed TLS certificate trust, device pairing/revocation and renewal for LAN devices;
 fully reconciled shifts and role overrides; lot-aware preparation/recalls and purchase-side unit conversion;
 price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
 backup automation and full disaster-recovery drills; tested thermal and label printers and
@@ -28,9 +28,8 @@ electronic scale models; Egyptian tax/e-invoice compliance; signed Android
 release; real Windows installer; accessibility and security review; and the
 complete 34-domain acceptance test suite.
 
-Do not expose `--bind=0.0.0.0` on an untrusted network; it is unencrypted HTTP.
-The `start_windows.ps1` launcher binds to localhost only.
-The Android debug build needs an isolated test LAN setup with a reachable branch host.
+Non-loopback bindings now require configured TLS certificates and keys; plaintext is loopback-only.
+The Windows launcher binds to localhost only. Android testing requires a reachable LAN HTTPS endpoint with an OS-trusted CA and matching DNS SAN.
 
 ## New hardening checkpoints
 - Schema v2 migration retains existing v1 records and rejects unknown future versions.
@@ -61,3 +60,10 @@ The Android debug build needs an isolated test LAN setup with a reachable branch
   device integration, approvals at configurable variance thresholds and cloud sync.
 
 [دليل الجرد بالعربية](STOCKTAKE_AR.md)
+
+## HTTPS milestone
+- Server refuses all plaintext non-loopback listening and accepts a configured TLS certificate/key pair.
+- Flutter refuses remote HTTP endpoints before sending login credentials or bearer tokens.
+- TLS tests use an ephemeral local test certificate with a real Shelf HTTPS listener when OpenSSL is available.
+- Still missing: per-device pairing, revocation, managed certificate lifecycle and field security validation.
+- [Arabic trusted HTTPS guide](HTTPS_LAN_AR.md).

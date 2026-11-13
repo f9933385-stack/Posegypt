@@ -2,16 +2,16 @@
 
 This is **not yet an internet-facing or production-ready financial service**.
 
-1. **Network:** default bind 127.0.0.1 only. `--bind=0.0.0.0` is a development option for trusted isolated LAN. Plain HTTP sends passwords and bearer tokens unencrypted; require authenticated TLS and secure device pairing before live use. Never expose port 8787 through router NAT/Internet.
+1. **Network:** default bind 127.0.0.1. HTTP is now allowed only on loopback; the Dart server requires both a TLS certificate and private key for every non-loopback bind address, and Flutter rejects remote HTTP before sending credentials. OS certificate/hostname trust remains mandatory. Device pairing, revocation, automatic certificate rotation, and penetration testing remain incomplete. Never expose the service publicly; see [Arabic HTTPS guide](HTTPS_LAN_AR.md).
 2. **Credentials:** set `KASHER_ADMIN_PASSWORD` during first-time bootstrap. No default password and no credentials are stored in the repository. Passwords are PBKDF2-HMAC-SHA256 with random salt; vetted Argon2id upgrade is an optional later enhancement. Session tokens are cryptographically random and stored only as SHA-256 hashes server-side. No token is persisted in Flutter SharedPreferences.
 3. **Authorization:** server validates roles, tenant, branch per action. Cost fields are redacted for cashier/viewer. Formal granular RBAC with explicit permission entries, creation and management of users, and audit of denied attempts remain unfinished.
 4. **Database:** SQLite foreign keys and WAL are enabled. Writes are synchronous `BEGIN IMMEDIATE` transactions; stock has no-negative-quantity constraint. Database file must remain private to Windows host, backed up safely; never mount to multiple clients over SMB. No encrypted-at-rest policy shipped.
 5. **Payment methods:** cash/card/wallet/bank are accounting labels, not integrations. No real payment card information, CVV, or banking credentials should be entered or stored.
 6. **Local files:** `data/`, `.env`, `.key`, `.pem`, `.db`, WAL/SHM are gitignored. Also restrict filesystem ACLs for the production host, logs, and backups.
-7. **Testing to add:** durable distributed rate limiting, penetration test, denied access tests, TLS and rotation, clock manipulation guard, digital signatures for licenses, key management, logging and monitoring. Basic login throttling and backup restore tests exist but do not replace field validation.
+7. **Testing to add:** durable distributed rate limiting, penetration test, denied access tests, managed TLS trust and certificate rotation on store hardware, clock manipulation guard, digital signatures for licenses, key management, logging and monitoring. Basic login throttling and backup restore tests exist but do not replace field validation.
 8. **Legal:** do not claim Egyptian e-invoice/e-receipt compliance; tax fields are for internal calculations only pending current legal review.
 
-For testing on Android, modern Android may block cleartext by default; **do not disable this globally for a production build**. Supply a TLS endpoint and certificate trust design when device integration is ready.
+Android clients now require a trusted HTTPS branch endpoint on the LAN. Never disable certificate verification or Android network protection to work around trust errors. Loopback HTTP is restricted to the same device.
 
 ## Operator backup tooling (development-grade)
 

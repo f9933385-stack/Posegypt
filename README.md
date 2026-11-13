@@ -131,3 +131,7 @@ The Arabic **الجرد المعتمد** module captures warehouse inventory wit
 posting financial movements until an independent owner/manager approves.
 Intervening sales or other warehouse stock movements invalidate the count,
 requiring a new count. See [Arabic stocktake guide](docs/STOCKTAKE_AR.md).
+
+### HTTPS-only remote branch connections
+
+The Dart server refuses non-loopback HTTP and requires --tls-cert / --tls-key for LAN listening. Flutter rejects plaintext remote server URLs before authentication. See [Arabic trusted HTTPS setup](docs/HTTPS_LAN_AR.md). Hardware pairing, revocation and production security assessments remain open.

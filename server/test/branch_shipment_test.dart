@@ -46,7 +46,8 @@ void main() {
     cmd(owner,'purchase',{'branch_id':sourceBranch,'supplier_id':supplier['id'],
       'lines':[{'product_id':product['id'],'qty_milli':7000,
         'unit_cost_minor':100,
-        if(tracked)'lot_no':if(tracked)'NEAR',if(tracked)'expires_on':'2030-01-01'}],
+        if(tracked)'lot_no':'NEAR',
+        if(tracked)'expires_on':'2030-01-01'}],
       'payments':<Map<String,dynamic>>[]});
     if(tracked) {
       cmd(owner,'purchase',{'branch_id':sourceBranch,'supplier_id':supplier['id'],

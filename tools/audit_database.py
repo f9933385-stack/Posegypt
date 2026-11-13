@@ -65,6 +65,31 @@ def audit(db_file: str) -> dict:
           ON m.branch_id=s.branch_id AND m.warehouse_id=s.warehouse_id
           AND m.product_id=s.product_id WHERE s.product_id IS NULL
         """)
+        # Only v3 branches have a separate, transactionally traced expiry-lot ledger.
+        has_lots = con.execute("""
+          SELECT 1 FROM sqlite_master WHERE type='table' AND name='batch_movements'
+        """).fetchone() is not None
+        if has_lots:
+            check("tracked_product_lot_quantity", """
+              SELECT s.branch_id, s.warehouse_id, s.product_id,
+                s.qty_milli AS stock_qty_milli,
+                COALESCE((SELECT SUM(b.qty_milli) FROM batches b
+                  WHERE b.warehouse_id=s.warehouse_id
+                  AND b.product_id=s.product_id),0) AS lot_qty_milli
+              FROM stock_balances s JOIN products p ON p.id=s.product_id
+              WHERE p.track_expiry=1 AND s.qty_milli<>COALESCE((
+                SELECT SUM(b.qty_milli) FROM batches b
+                WHERE b.warehouse_id=s.warehouse_id AND b.product_id=s.product_id),0)
+            """)
+            check("tracked_lot_movement_balance", """
+              SELECT b.id,b.qty_milli AS stored_qty,
+                COALESCE((SELECT SUM(m.qty_change_milli) FROM batch_movements m
+                  WHERE m.batch_id=b.id),0) AS moved_qty
+              FROM batches b JOIN products p ON p.id=b.product_id
+              WHERE p.track_expiry=1 AND b.qty_milli<>COALESCE((
+                SELECT SUM(m.qty_change_milli) FROM batch_movements m
+                WHERE m.batch_id=b.id),0)
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

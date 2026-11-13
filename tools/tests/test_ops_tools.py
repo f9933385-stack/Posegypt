@@ -99,6 +99,35 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         self.assertEqual(output['status'], 'fail')
         self.assertIn('stock_qty_reconciliation', output['errors'])
 
+    def test_tracked_product_without_lots_is_rejected(self):
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE products SET track_expiry=1 WHERE id='P'")
+        con.commit()
+        con.close()
+        output=audit(str(self.db))
+        self.assertEqual(output['status'], 'fail')
+        self.assertIn('tracked_product_lot_quantity', output['errors'])
+
+    def test_tampered_lot_balance_is_reported(self):
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE products SET track_expiry=1 WHERE id='P'")
+        con.execute("""
+          INSERT INTO batches(id,warehouse_id,product_id,lot_no,expires_on,qty_milli)
+          VALUES('LOT','W','P','L-1','2031-01-01',1000)
+        """)
+        con.execute("""
+          INSERT INTO batch_movements(id,batch_id,qty_change_milli,reference_type,reference_id,created_at)
+          VALUES('LM','LOT',1000,'purchase','test','now')
+        """)
+        con.commit()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con.execute("UPDATE batches SET qty_milli=999 WHERE id='LOT'")
+        con.commit()
+        con.close()
+        output=audit(str(self.db))
+        self.assertIn('tracked_lot_movement_balance', output['errors'])
+        self.assertIn('tracked_product_lot_quantity', output['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

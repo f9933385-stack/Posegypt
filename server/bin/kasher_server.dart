@@ -5,12 +5,15 @@ import 'package:kasher_server/src/api.dart';
 import 'package:kasher_server/src/engine.dart';
 import 'package:kasher_server/src/security.dart';
 import 'package:kasher_server/src/store.dart';
+import 'package:kasher_server/src/network_policy.dart';
 
 Future<void> main(List<String> args) async {
   final parser=ArgParser()
     ..addOption('db',defaultsTo:'data/kasher.sqlite3')
     ..addOption('bind',defaultsTo:'127.0.0.1')
     ..addOption('port',defaultsTo:'8787')
+    ..addOption('tls-cert',help:'PEM certificate chain for non-loopback HTTPS')
+    ..addOption('tls-key',help:'PEM private key for non-loopback HTTPS')
     ..addOption('name',defaultsTo:'سوبرماركت جديد')
     ..addOption('branch',defaultsTo:'الفرع الرئيسي')
     ..addOption('username',defaultsTo:'admin');
@@ -38,12 +41,25 @@ Future<void> main(List<String> args) async {
   final host=options['bind'] as String;
   final port=int.tryParse(options['port'] as String);
   if(port==null || port<1 || port>65535) {stderr.writeln('Invalid port');exitCode=2;store.dispose();return;}
-  if(host!='127.0.0.1' && host!='localhost') {
-    stderr.writeln('WARNING: LAN mode uses HTTP without TLS. Use trusted isolated LAN only; do not expose to Internet.');
+  SecurityContext? transport;
+  try {
+    transport=branchTransport(
+      bind:host,
+      certificatePath:options['tls-cert'] as String?,
+      privateKeyPath:options['tls-key'] as String?,
+      privateKeyPassword:Platform.environment['KASHER_TLS_KEY_PASSWORD'],
+    );
+  } on FormatException catch(e) {
+    stderr.writeln('Refusing unsafe server binding: ${e.message}');
+    store.dispose();exitCode=2;return;
+  } on FileSystemException catch(_) {
+    stderr.writeln('TLS certificate/key could not be read');
+    store.dispose();exitCode=2;return;
   }
   final api=KasherApi(engine,AuthService(store));
-  final server=await shelf_io.serve(api.handler,host,port);
-  stdout.writeln('Kasher branch service running at http://${server.address.host}:${server.port}');
+  final server=await shelf_io.serve(api.handler,host,port,
+    securityContext:transport,poweredByHeader:null);
+  stdout.writeln('Kasher branch service running at ${transport==null?'http':'https'}://${server.address.host}:${server.port}');
   await ProcessSignal.sigint.watch().first;
   await server.close(force:true);
   store.dispose();

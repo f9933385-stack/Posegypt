@@ -9,7 +9,7 @@ void main() {
   late Principal owner,stock,second;
   late String branch,warehouse;
   var seq=0;
-  Map<String,Object?> as(Principal principal,String action,Map<String,dynamic> input)=>
+  Map<String,Object?> act(Principal principal,String action,Map<String,dynamic> input)=>
     engine.command(principal,action,input,'count-test-'+(seq++).toString()+'-unique-key-123456789');
 
   setUp(() {
@@ -19,11 +19,11 @@ void main() {
     branch=setup['branch_id'] as String;
     warehouse=setup['warehouse_id'] as String;
     owner=Principal(setup['user_id'] as String,setup['tenant_id'] as String,branch,'owner','admin');
-    final worker=as(owner,'create_user',{
+    final worker=act(owner,'create_user',{
       'username':'inventory-worker','password':'stock-worker-strong-123',
       'role':'stock','branch_id':branch});
     stock=Principal(worker['id'] as String,owner.tenantId,branch,'stock','inventory-worker');
-    final manager=as(owner,'create_user',{
+    final manager=act(owner,'create_user',{
       'username':'branch-manager','password':'manager-password-123',
       'role':'manager','branch_id':branch});
     second=Principal(manager['id'] as String,owner.tenantId,branch,'manager','branch-manager');
@@ -31,12 +31,12 @@ void main() {
   tearDown(()=>store.dispose());
 
   Map<String,Object?> product(String sku,{bool tracked=false})=>
-    as(owner,'create_product',{'sku':sku,'name_ar':'منتج للاختبار',
+    act(owner,'create_product',{'sku':sku,'name_ar':'منتج للاختبار',
       'sell_price_minor':250,'track_expiry':tracked});
   Map<String,Object?> receive(String sku,int qty,int unitCost,{bool tracked=false}) {
     final p=product(sku,tracked:tracked);
-    final supplier=as(owner,'create_supplier',{'name':'مورد اختبار'});
-    as(owner,'purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+    final supplier=act(owner,'create_supplier',{'name':'مورد اختبار'});
+    act(owner,'purchase',{'branch_id':branch,'supplier_id':supplier['id'],
       'lines':[{'product_id':p['id'],'qty_milli':qty,
         'unit_cost_minor':unitCost,
         if(tracked)'lot_no':'LOT-'+sku,
@@ -50,7 +50,7 @@ void main() {
   Map<String,Object?> line(String id)=>(
     engine.readCount(stock,id)['lines'] as List).cast<Map<String,Object?>>().single;
   void record(String id,Object? lineId,int counted,{int? added})=>
-    as(stock,'count_line',{'count_id':id,'line_id':lineId,
+    act(stock,'count_line',{'count_id':id,'line_id':lineId,
       'counted_qty_milli':counted,
       if(added!=null)'added_cost_minor':added});
 
@@ -65,9 +65,9 @@ void main() {
     record(id,first['id'],1500,added:50);
     expect(engine.listStock(owner,branch).single['qty_milli'],1000);
     expect(engine.listStock(owner,branch).single['cost_minor'],100);
-    expect(as(stock,'count_submit',{'count_id':id})['status'],'submitted');
-    expect(()=>as(stock,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
-    final outcome=as(owner,'count_approve',{'count_id':id});
+    expect(act(stock,'count_submit',{'count_id':id})['status'],'submitted');
+    expect(()=>act(stock,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
+    final outcome=act(owner,'count_approve',{'count_id':id});
     expect(outcome['status'],'posted');
     expect(outcome['changed_lines'],1);
     expect(outcome['value_added_minor'],50);
@@ -77,7 +77,7 @@ void main() {
     expect(engine.readCount(owner,id)['approved_by'],owner.id);
     expect(store.rows("SELECT id FROM inventory_movements WHERE reference_type='stock_count' AND reference_id=?",[id]).length,1);
     expect(store.rows("SELECT e.id FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id GROUP BY e.id HAVING SUM(l.debit_minor-l.credit_minor)<>0"),isEmpty);
-    expect(()=>as(owner,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
+    expect(()=>act(owner,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
     expect(p['sku'],'ST-ADD');
   });
 
@@ -85,8 +85,8 @@ void main() {
     receive('ST-ZERO',3000,100);
     final id=open(stock)['id'] as String;
     record(id,line(id)['id'],0);
-    as(stock,'count_submit',{'count_id':id});
-    final result=as(second,'count_approve',{'count_id':id});
+    act(stock,'count_submit',{'count_id':id});
+    final result=act(second,'count_approve',{'count_id':id});
     expect(result['value_removed_minor'],300);
     expect(engine.listStock(owner,branch).single['qty_milli'],0);
     expect(engine.listStock(owner,branch).single['cost_minor'],0);
@@ -96,9 +96,9 @@ void main() {
   test('unrecorded lines prevent submission and count entries may be cancelled',(){
     receive('ST-NO-INPUT',1000,100);
     final id=open(stock)['id'] as String;
-    expect(()=>as(stock,'count_submit',{'count_id':id}),throwsA(isA<DomainError>()));
+    expect(()=>act(stock,'count_submit',{'count_id':id}),throwsA(isA<DomainError>()));
     expect(()=>open(stock),throwsA(isA<DomainError>()));
-    expect(as(owner,'count_cancel',{'count_id':id,'reason':'تأجيل الجرد'})['status'],'cancelled');
+    expect(act(owner,'count_cancel',{'count_id':id,'reason':'تأجيل الجرد'})['status'],'cancelled');
     expect(open(stock)['status'],'draft');
     expect(engine.listStock(owner,branch).single['qty_milli'],1000);
   });
@@ -107,10 +107,10 @@ void main() {
     final p=receive('ST-STALE',2000,100);
     final id=open(stock)['id'] as String;
     record(id,line(id)['id'],1000);
-    as(owner,'sale',{'branch_id':branch,'lines':[{
+    act(owner,'sale',{'branch_id':branch,'lines':[{
       'product_id':p['id'],'qty_milli':1000}],
       'payments':[{'method':'cash','amount_minor':250}]});
-    expect(()=>as(stock,'count_submit',{'count_id':id}),throwsA(isA<DomainError>()));
+    expect(()=>act(stock,'count_submit',{'count_id':id}),throwsA(isA<DomainError>()));
     expect(engine.listStock(owner,branch).single['qty_milli'],1000);
     expect(store.rows("SELECT id FROM inventory_movements WHERE reference_type='stock_count'"),isEmpty);
   });
@@ -119,11 +119,11 @@ void main() {
     final p=receive('ST-STALE-2',2000,100);
     final id=open(stock)['id'] as String;
     record(id,line(id)['id'],1000);
-    as(stock,'count_submit',{'count_id':id});
-    as(owner,'sale',{'branch_id':branch,'lines':[{
+    act(stock,'count_submit',{'count_id':id});
+    act(owner,'sale',{'branch_id':branch,'lines':[{
       'product_id':p['id'],'qty_milli':1000}],
       'payments':[{'method':'cash','amount_minor':250}]});
-    expect(()=>as(owner,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
+    expect(()=>act(owner,'count_approve',{'count_id':id}),throwsA(isA<DomainError>()));
     expect(engine.listStock(owner,branch).single['qty_milli'],1000);
     expect(engine.readCount(owner,id)['status'],'submitted');
   });
@@ -134,8 +134,8 @@ void main() {
     final countLine=line(id);
     expect(countLine['batch_id'],isNotNull);
     record(id,countLine['id'],1500);
-    as(stock,'count_submit',{'count_id':id});
-    as(owner,'count_approve',{'count_id':id});
+    act(stock,'count_submit',{'count_id':id});
+    act(owner,'count_approve',{'count_id':id});
     final lots=engine.listLots(owner,branch,productId:p['id'] as String);
     expect(lots.single['qty_milli'],1500);
     expect(engine.listStock(owner,branch).single['qty_milli'],1500);
@@ -156,10 +156,10 @@ void main() {
     receive('ST-CLOSED',1000,100);
     final id=open(stock)['id'] as String;
     record(id,line(id)['id'],1000);
-    as(stock,'count_submit',{'count_id':id});
-    as(owner,'count_approve',{'count_id':id});
+    act(stock,'count_submit',{'count_id':id});
+    act(owner,'count_approve',{'count_id':id});
     expect(()=>record(id,line(id)['id'],900),throwsA(isA<DomainError>()));
-    expect(()=>as(owner,'count_cancel',{'count_id':id,'reason':'إلغاء بعد الاعتماد'}),
+    expect(()=>act(owner,'count_cancel',{'count_id':id,'reason':'إلغاء بعد الاعتماد'}),
       throwsA(isA<DomainError>()));
     expect(store.rows("SELECT id FROM inventory_movements WHERE reference_type='stock_count'"),isEmpty);
   });

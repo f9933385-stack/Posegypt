@@ -40,25 +40,49 @@ class Principal {
 class AuthService {
   final DatabaseStore store;
   AuthService(this.store);
-  Map<String,Object?>? login(String tenantId,String username,String password) {
+  Map<String,Object?>? login(String tenantId,String username,String password,
+      {String? deviceId,String? deviceSecret,bool requireDevice=false}) {
     final user = store.first('SELECT * FROM users WHERE tenant_id=? AND username=? AND active=1',[tenantId,username]);
     if (user == null) return null;
     final actual = pbkdf2(password,user['password_salt'] as String);
     if (!safeEqual(actual,user['password_hash'] as String)) return null;
+    String? registeredId;
+    if(deviceId!=null || deviceSecret!=null || requireDevice) {
+      if(deviceId==null || deviceSecret==null ||
+          deviceId.isEmpty || deviceSecret.length<32) return null;
+      final device=store.first('''SELECT id,branch_id,secret_hash FROM registered_devices
+        WHERE id=? AND tenant_id=? AND active=1''',[deviceId,tenantId]);
+      if(device==null || !safeEqual(hashToken(deviceSecret),device['secret_hash'] as String)) {
+        return null;
+      }
+      if(user['role']!='owner' && user['branch_id']!=device['branch_id']) return null;
+      registeredId=deviceId;
+    }
     final token = secureToken();
     final now = DateTime.now().toUtc();
-    store.exec('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)',
-      [hashToken(token),user['id'],now.add(const Duration(hours:12)).toIso8601String(),now.toIso8601String()]);
+    store.transaction(() {
+      store.exec('''INSERT INTO sessions(token_hash,user_id,expires_at,created_at,device_id)
+        VALUES(?,?,?,?,?)''',
+        [hashToken(token),user['id'],
+          now.add(const Duration(hours:12)).toIso8601String(),now.toIso8601String(),registeredId]);
+      if(registeredId!=null) store.exec('UPDATE registered_devices SET last_seen_at=? WHERE id=?',
+        [now.toIso8601String(),registeredId]);
+    });
     return {'token':token,'tenant_id':tenantId,'user_id':user['id'],'branch_id':user['branch_id'],
-      'role':user['role'],'username':username};
+      'role':user['role'],'username':username,'device_id':registeredId};
   }
-  Principal? authenticate(String? authorization) {
+  Principal? authenticate(String? authorization,{bool requireDevice=false}) {
     if (authorization == null || !authorization.startsWith('Bearer ')) return null;
     final token = authorization.substring(7).trim();
-    final u = store.first('''SELECT u.* FROM sessions s JOIN users u ON s.user_id=u.id
+    final u = store.first('''SELECT u.*,s.device_id AS session_device_id,
+      d.active AS enrolled_device_active FROM sessions s
+      JOIN users u ON s.user_id=u.id
+      LEFT JOIN registered_devices d ON d.id=s.device_id
       WHERE s.token_hash=? AND s.expires_at>? AND u.active=1''',
       [hashToken(token),DateTime.now().toUtc().toIso8601String()]);
     if (u == null) return null;
+    if(u['session_device_id']!=null && u['enrolled_device_active']!=1) return null;
+    if(requireDevice && u['session_device_id']==null) return null;
     return Principal(u['id'] as String,u['tenant_id'] as String,u['branch_id'] as String?,u['role'] as String,u['username'] as String);
   }
   void logout(String token) => store.exec('DELETE FROM sessions WHERE token_hash=?',[hashToken(token)]);

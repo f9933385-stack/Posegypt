@@ -32,15 +32,48 @@ class _PosState extends State<PosPage> {
   @override void initState(){super.initState();products=widget.api.list('products');customers=widget.api.list('customers');}
   @override void dispose(){for(final c in [search,cash,card,wallet,bank]){c.dispose();}super.dispose();}
   void _search(String q)=>setState(()=>products=widget.api.list('products',{'q':q}));
+  Future<void> _scanBarcode(String code) async {
+    final cleaned=code.trim();
+    if(cleaned.isEmpty)return;
+    try {
+      final results=await widget.api.list('products',{'q':cleaned});
+      if(!mounted)return;
+      final matching=results.where((p)=>
+        p['sku']==cleaned || p['barcode']==cleaned || p['matched_unit_id']!=null).toList();
+      if(matching.length!=1)return;
+      final product=matching.single;
+      if(product['matched_unit_id']!=null) {
+        await _addUnit(product,preferredUnitId:product['matched_unit_id'].toString());
+      } else {
+        _add(product);
+      }
+      if(mounted){search.clear();_search('');}
+    }catch(e) {if(mounted)alert(context,'لم يتم التعرف على الباركود: '+e.toString(),error:true);}
+  }
   void _add(Map<String,dynamic> p){setState(() {
     final index=cart.indexWhere((x)=>x.product['id']==p['id'] && x.unit==null);
     if(index<0)cart.add(CartLine(p));else cart[index].qtyMilli+=1000;
   });}
-  Future<void> _addUnit(Map<String,dynamic> product) async {
+  void _pushUnit(Map<String,dynamic> product,Map<String,dynamic> unit) {
+    setState(() {
+      final index=cart.indexWhere((x)=>x.product['id']==product['id'] &&
+        x.unit?['id']==unit['id']);
+      if(index<0)cart.add(CartLine(product,unit:unit));
+      else cart[index].unitCount++;
+    });
+  }
+  Future<void> _addUnit(Map<String,dynamic> product,{String? preferredUnitId}) async {
     try {
       final units=await widget.api.list('units',{'product_id':product['id'].toString()});
       if(!mounted)return;
       if(units.isEmpty){alert(context,'أضف وحدات البيع للصنف من شاشة المخزون أولًا',error:true);return;}
+      if(preferredUnitId!=null) {
+        final matches=units.where((u)=>u['id']==preferredUnitId).toList();
+        if(matches.length==1) {
+          _pushUnit(product,matches.single);
+          return;
+        }
+      }
       final unit=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
         title:Text('اختر وحدة بيع: '+product['name_ar'].toString()),
         content:SizedBox(width:450,child:SingleChildScrollView(child:Column(
@@ -55,12 +88,7 @@ class _PosState extends State<PosPage> {
         actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء'))],
       ));
       if(unit==null || !mounted)return;
-      setState(() {
-        final index=cart.indexWhere((x)=>x.product['id']==product['id'] &&
-          x.unit?['id']==unit['id']);
-        if(index<0)cart.add(CartLine(product,unit:unit));
-        else cart[index].unitCount++;
-      });
+      _pushUnit(product,unit);
     }catch(e){if(mounted)alert(context,'تعذر تحميل وحدات الصنف: '+e.toString(),error:true);}
   }
 
@@ -104,7 +132,8 @@ class _PosState extends State<PosPage> {
   @override Widget build(BuildContext context)=>LayoutBuilder(builder:(context,layout){
     final wide=layout.maxWidth>=900;
     final productsView=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      TextField(controller:search,onChanged:_search,decoration:const InputDecoration(
+      TextField(controller:search,onChanged:_search,onSubmitted:_scanBarcode,
+        decoration:const InputDecoration(
         prefixIcon:Icon(Icons.search),hintText:'اسم المنتج، SKU، أو الباركود')),
       const SizedBox(height:12),Expanded(child:AsyncPanel<List<Map<String,dynamic>>>(future:products,
         onRetry:()=>_search(search.text),builder:(list)=>list.isEmpty?const EmptyState('لا توجد أصناف مطابقة'):
@@ -115,7 +144,8 @@ class _PosState extends State<PosPage> {
             IconButton(onPressed:()=>_addUnit(p),tooltip:'بيع بالكرتونة أو الوحدة',
               icon:const Icon(Icons.all_inbox_outlined)),
             IconButton(onPressed:()=>_add(p),tooltip:'إضافة بوحدة الأساس',
-              icon:const Icon(Icons.add_circle_outline))]),onTap:()=>_add(p)));}))),
+              icon:const Icon(Icons.add_circle_outline))]),onTap:()=>p['matched_unit_id']==null?_add(p):
+            _addUnit(p,preferredUnitId:p['matched_unit_id'].toString())));}))),
     ]);
     final basket=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
       Row(children:[const Expanded(child:Text('الفاتورة الحالية',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold))),

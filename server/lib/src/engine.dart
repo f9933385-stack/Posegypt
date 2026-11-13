@@ -746,10 +746,16 @@ class PosEngine {
 
   List<Map<String,Object?>> listProducts(Principal p,{String search='',int limit=100}) => store.rows('''
     SELECT p.id,p.sku,p.barcode,p.name_ar,p.name_en,p.category,p.base_unit,p.sell_price_minor,
-           p.reorder_qty_milli,p.tax_rate_bp,p.track_expiry,p.active
+           p.reorder_qty_milli,p.tax_rate_bp,p.track_expiry,p.active,
+           (SELECT u.id FROM product_units u WHERE u.product_id=p.id
+              AND u.active=1 AND u.barcode=? LIMIT 1) AS matched_unit_id
     FROM products p WHERE p.tenant_id=? AND p.active=1
-    AND (p.name_ar LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)
-    ORDER BY p.name_ar LIMIT ?''',[p.tenantId,'%$search%','%$search%','%$search%',limit.clamp(1,200)]);
+    AND (p.name_ar LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?
+      OR EXISTS(SELECT 1 FROM product_units u WHERE u.product_id=p.id
+        AND u.active=1 AND u.barcode LIKE ?))
+    ORDER BY p.name_ar LIMIT ?''',
+    [search,p.tenantId,'%$search%','%$search%','%$search%','%$search%',
+      limit.clamp(1,200)]);
 
   List<Map<String,Object?>> listParties(Principal p,{required bool customers}) {
     if (!customers) _allow(p,['owner','manager','purchasing']);

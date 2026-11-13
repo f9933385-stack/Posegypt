@@ -246,6 +246,20 @@ void main() {
     expect(store.rows('SELECT id FROM documents WHERE kind=?',['sale']),isEmpty);
   });
 
+  test('searching a carton barcode resolves product and matching unit exactly', () {
+    final product=call('create_product',{'sku':'SEARCH-1','name_ar':'حليب',
+      'sell_price_minor':50,'barcode':'2100000000000'});
+    final unit=call('create_product_unit',{'product_id':product['id'],
+      'unit_name':'كرتونة 6','factor_milli':6000,'sell_price_minor':270,
+      'barcode':'2100000000001'});
+    final list=engine.listProducts(owner,search:'2100000000001');
+    expect(list.length,1);
+    expect(list.single['id'],product['id']);
+    expect(list.single['matched_unit_id'],unit['id']);
+    final base=engine.listProducts(owner,search:'2100000000000');
+    expect(base.single['matched_unit_id'],null);
+  });
+
   test('credit limits are enforced server-side', () {
     final p=call('create_product',{'sku':'D1','name_ar':'ماء','sell_price_minor':500});
     final s=call('create_supplier',{'name':'مورد مياه'});

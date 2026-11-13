@@ -177,3 +177,29 @@ const schemaV2 = <String>[
   '''ALTER TABLE document_lines ADD COLUMN unit_id TEXT''',
   '''ALTER TABLE document_lines ADD COLUMN unit_count INTEGER''',
 ];
+
+///// V3: immutable stock-lot movement trail (full lot identifiers are never guessed).
+const schemaV3 = <String>[
+  '''CREATE TABLE IF NOT EXISTS batch_movements (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES batches(id),
+    qty_change_milli INTEGER NOT NULL CHECK(qty_change_milli != 0),
+    reference_type TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    document_line_id TEXT REFERENCES document_lines(id),
+    origin_line_id TEXT REFERENCES document_lines(id),
+    created_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_batch_moves_line
+     ON batch_movements(document_line_id,reference_type)''',
+  '''CREATE INDEX IF NOT EXISTS ix_batch_moves_origin
+     ON batch_movements(origin_line_id,reference_type)''',
+  '''CREATE INDEX IF NOT EXISTS ix_batches_fefo
+     ON batches(warehouse_id,product_id,expires_on,qty_milli)''',
+  '''CREATE TRIGGER IF NOT EXISTS tr_batches_no_negative_insert
+    BEFORE INSERT ON batches WHEN NEW.qty_milli < 0
+    BEGIN SELECT RAISE(ABORT,'Batch quantity must not be negative'); END''',
+  '''CREATE TRIGGER IF NOT EXISTS tr_batches_no_negative_update
+    BEFORE UPDATE OF qty_milli ON batches WHEN NEW.qty_milli < 0
+    BEGIN SELECT RAISE(ABORT,'Batch quantity must not be negative'); END''',
+];

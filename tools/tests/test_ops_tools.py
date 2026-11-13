@@ -167,6 +167,23 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         result=audit(str(self.db))
         self.assertIn('stock_count_variance_movement',result['errors'])
 
+    def test_in_transit_shipment_without_source_movement_is_detected(self):
+        con=sqlite3.connect(self.db)
+        con.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B2','T','BR2','Branch2','now')")
+        con.execute("INSERT INTO warehouses(id,branch_id,name,is_default) VALUES('W2','B2','Destination',1)")
+        con.execute("""
+          INSERT INTO branch_shipments(
+            id,tenant_id,source_branch_id,destination_branch_id,
+            source_warehouse_id,destination_warehouse_id,product_id,
+            qty_milli,cost_minor,status,dispatched_by,dispatched_at
+          ) VALUES('SHIP','T','B','B2','W','W2','P',1000,100,'in_transit','U','now')
+        """)
+        con.commit()
+        con.close()
+        result=audit(str(self.db))
+        self.assertIn('branch_shipment_movement',result['errors'])
+        self.assertIn('branch_shipment_transit_value',result['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

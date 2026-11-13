@@ -119,6 +119,61 @@ def audit(db_file: str) -> dict:
               GROUP BY c.id,l.product_id
               HAVING intended_delta<>applied_delta
             """)
+        has_shipments = con.execute("""
+          SELECT 1 FROM sqlite_master WHERE type='table' AND name='branch_shipments'
+        """).fetchone() is not None
+        if has_shipments:
+            check("branch_shipment_location", """
+              SELECT s.id FROM branch_shipments s
+              JOIN branches src ON src.id=s.source_branch_id
+              JOIN branches dst ON dst.id=s.destination_branch_id
+              JOIN warehouses w1 ON w1.id=s.source_warehouse_id
+              JOIN warehouses w2 ON w2.id=s.destination_warehouse_id
+              JOIN products p ON p.id=s.product_id
+              WHERE src.tenant_id<>s.tenant_id
+                 OR dst.tenant_id<>s.tenant_id
+                 OR p.tenant_id<>s.tenant_id
+                 OR w1.branch_id<>s.source_branch_id
+                 OR w2.branch_id<>s.destination_branch_id
+            """)
+            check("branch_shipment_movement", """
+              SELECT s.id,s.qty_milli,s.status
+              FROM branch_shipments s
+              WHERE COALESCE((SELECT SUM(-m.qty_change_milli)
+                FROM inventory_movements m
+                WHERE m.reference_type='branch_dispatch' AND m.reference_id=s.id),0)
+                    <>s.qty_milli
+                 OR COALESCE((SELECT SUM(m.qty_change_milli)
+                FROM inventory_movements m
+                WHERE m.reference_type='branch_receive' AND m.reference_id=s.id),0)
+                    <> CASE WHEN s.status='received' THEN s.qty_milli ELSE 0 END
+                 OR COALESCE((SELECT SUM(m.qty_change_milli)
+                FROM inventory_movements m
+                WHERE m.reference_type='branch_dispatch_cancel' AND m.reference_id=s.id),0)
+                    <> CASE WHEN s.status='cancelled' THEN s.qty_milli ELSE 0 END
+            """)
+            check("branch_shipment_lot_trace", """
+              SELECT s.id,s.qty_milli FROM branch_shipments s
+              JOIN products p ON p.id=s.product_id
+              WHERE p.track_expiry=1 AND s.qty_milli<>COALESCE((
+                SELECT SUM(l.qty_milli) FROM branch_shipment_lots l
+                WHERE l.shipment_id=s.id),0)
+            """)
+            check("branch_shipment_receiver_separation", """
+              SELECT s.id FROM branch_shipments s
+              WHERE s.status='received' AND
+              (s.received_by IS NULL OR s.received_at IS NULL
+                OR s.received_by=s.dispatched_by)
+            """)
+            check("branch_shipment_transit_value", """
+              SELECT * FROM (
+                SELECT
+                  COALESCE((SELECT SUM(cost_minor) FROM branch_shipments
+                    WHERE status='in_transit'),0) AS expected_minor,
+                  COALESCE((SELECT SUM(debit_minor-credit_minor)
+                    FROM journal_lines WHERE account='IN_TRANSIT'),0) AS ledger_minor
+              ) WHERE expected_minor<>ledger_minor
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

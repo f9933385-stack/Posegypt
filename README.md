@@ -147,3 +147,8 @@ Purchase invoices may now receive configured product units (box/carton) by integ
 ### Scheduled promotional prices (development schema v7)
 
 Owners/managers can configure nonoverlapping UTC time-window sale prices per base product or carton. The Dart server enforces final price at posting, and Flutter displays the effective price. See [Arabic promotions guide](docs/PROMOTIONS_AR.md). Coupons, conditional campaigns, per-branch pricing and customer-facing price re-confirmation are still excluded.
+
+
+### Shared-database inter-branch shipments (schema v8)
+
+The Arabic inter-branch shipments screen supports a two-phase dispatch and independent receipt, WAC in-transit ledger, lot identity preservation, and cancellation before receipt. This works **only when both branches share the same SQLite server**; offline cross-host replication remains a release blocker. See [Arabic guide](docs/BRANCH_SHIPMENTS_AR.md).

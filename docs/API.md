@@ -169,3 +169,8 @@ Product and unit lookup responses include `effective_sell_price_minor` and `prom
 ### Optional cart total lock (promotional price changes)
 
 For sale requests, pass integer `expected_total_minor` equal to the amount the operator approved in the client cart. The server **recomputes** current promotional pricing at the moment of posting and rejects mismatches with HTTP 409, without posting any inventory or financial movement. The latest Flutter POS includes this field by default. Historical integrations omitting it remain backwards compatible, but should add it to prevent stale cart pricing.
+
+
+## Local shared-database branch shipment workflow (schema v8)
+
+For branches registered **in the same SQLite host** (not offline/cloud replication), `POST /api/v1/branch-shipments/dispatch` accepts source/destination branch+warehouse IDs, product ID, and quantity in thousandths. Dispatch debits `IN_TRANSIT` and credits source `INVENTORY`; `POST /api/v1/branch-shipments/receive` requires a distinct authorized receiver and transfers value to destination inventory, preserving FEFO lot numbers and expiry dates. `POST /api/v1/branch-shipments/cancel` reverses an outstanding dispatch to source with a required reason. `GET /api/v1/branch-shipments?branch_id=...` lists relevant shipments, and `GET /api/v1/branch-shipments/<id>` includes lots. [Arabic instructions](BRANCH_SHIPMENTS_AR.md).

@@ -89,3 +89,11 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - [Arabic promotions guide](PROMOTIONS_AR.md).
 
 - Promotion checkout safety: Flutter now sends `expected_total_minor`; the server rejects a changed price with HTTP 409 and rolls back the sale. The cashier must refresh and re-confirm. A dedicated interactive stale-price dialog is still missing.
+
+
+## Two-phase local branch shipping (schema v8)
+- Pending shipments reserve inventory in a separate `IN_TRANSIT` accounting ledger; destination quantities change only on receipt.
+- Owner/manager create and cancel; a **different authorized destination manager/owner** confirms receipt. Idempotent writes prevent duplicate subtraction or reception.
+- Tracked goods preserve FEFO lots and expiry; auditor checks movement and transit-value consistency.
+- **Not cloud sync:** this works on one shared SQLite host only. Separate machines, unreliable WAN, partial receipts, damage claims, signature capture, and network conflict resolution are still missing.
+- [Arabic shipping guide](BRANCH_SHIPMENTS_AR.md).

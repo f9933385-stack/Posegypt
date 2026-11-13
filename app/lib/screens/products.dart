@@ -39,6 +39,46 @@ class _ProductsState extends State<ProductsPage> {
     try {await widget.api.post('products',result);if(mounted){alert(context,'تمت إضافة الصنف');_reload();}}
     catch(e){if(mounted)alert(context,'تعذر الإضافة: $e',error:true);}
   }
+  Future<void> _createUnit(Map<String,dynamic> product) async {
+    final name=TextEditingController(),factor=TextEditingController(text:'12'),
+      price=TextEditingController(),barcode=TextEditingController();
+    final input=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text('إضافة وحدة بيع: '+product['name_ar'].toString()),
+      content:SizedBox(width:460,child:SingleChildScrollView(child:Column(
+        mainAxisSize:MainAxisSize.min,children:[
+          const Text('مثال: كرتونة = 12 قطعة. المخزون يبقى بوحدة الأساس، وسعر الكرتونة مستقل.'),
+          const SizedBox(height:12),
+          TextField(controller:name,decoration:const InputDecoration(labelText:'اسم الوحدة (كرتونة/علبة)')),
+          const SizedBox(height:10),
+          TextField(controller:factor,keyboardType:TextInputType.number,
+            decoration:InputDecoration(labelText:'كم '+product['base_unit'].toString()+' داخل الوحدة؟')),
+          const SizedBox(height:10),
+          TextField(controller:price,keyboardType:TextInputType.number,
+            decoration:const InputDecoration(labelText:'سعر بيع الوحدة بالجنيه')),
+          const SizedBox(height:10),
+          TextField(controller:barcode,decoration:const InputDecoration(labelText:'باركود الوحدة (اختياري)')),
+        ]))),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
+        FilledButton(onPressed:(){
+          try {
+            final multiplier=parseQty(factor.text);
+            if(multiplier<=0 || name.text.trim().isEmpty)throw const FormatException('Invalid unit');
+            Navigator.pop(ctx,{'product_id':product['id'],'unit_name':name.text.trim(),
+              'factor_milli':multiplier,'sell_price_minor':parseMoney(price.text),
+              'barcode':barcode.text.trim()});
+          }catch(_){alert(ctx,'تأكد من اسم الوحدة ومعامل التحويل وسعرها',error:true);}
+        },child:const Text('إضافة')),
+      ],
+    ));
+    for(final c in [name,factor,price,barcode]){c.dispose();}
+    if(input==null)return;
+    try {
+      await widget.api.post('units',input);
+      if(mounted) alert(context,'تم إضافة وحدة البيع بنجاح');
+    }catch(e){if(mounted)alert(context,'تعذر إضافة الوحدة: $e',error:true);}
+  }
+
   Future<void> _adjust(Map<String,dynamic> product) async {
     final qty=TextEditingController(),cost=TextEditingController(text:'0'),reason=TextEditingController();
     final result=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(
@@ -71,6 +111,8 @@ class _ProductsState extends State<ProductsPage> {
           return Card(child:ListTile(leading:CircleAvatar(child:Icon(low?Icons.warning_amber:Icons.inventory_2_outlined)),
             title:Text(p['name_ar'].toString()),subtitle:Text('${p['sku']} • ${p['base_unit']} • رصيد ${quantity(available)}'),
             trailing:Row(mainAxisSize:MainAxisSize.min,children:[Text(money(asInt(p['sell_price_minor']))),
+              IconButton(onPressed:()=>_createUnit(p),tooltip:'إضافة وحدة بيع (كرتونة/علبة)',
+                icon:const Icon(Icons.all_inbox_outlined)),
               IconButton(onPressed:()=>_adjust(p),tooltip:'تسوية المخزون',icon:const Icon(Icons.tune))])));});
       }))),
   ]);

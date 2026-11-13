@@ -68,7 +68,10 @@ def _safe_prune(directory: Path, keep: int) -> list[str]:
 
 
 def run_once(source: Path, backup_dir: Path, password: str, *, keep: int = 14,
-             timestamp: datetime | None = None) -> dict:
+             timestamp: datetime | None = None,
+             offsite_dir: Path | None = None,
+             scratch_dir: Path | None = None,
+             offsite_keep: int = 30) -> dict:
     """Snapshot live SQLite safely, decrypt to a disposable file, audit, then prune.
 
     Snapshot consistency uses SQLite backup API, including live WAL activity.
@@ -77,6 +80,10 @@ def run_once(source: Path, backup_dir: Path, password: str, *, keep: int = 14,
     """
     if keep < 2 or keep > 365:
         raise ValueError("keep must be between 2 and 365")
+    if (offsite_dir is None) != (scratch_dir is None):
+        raise ValueError("Both offsite_dir and scratch_dir must be provided together")
+    if offsite_dir is not None and (offsite_keep < 2 or offsite_keep > 365):
+        raise ValueError("offsite_keep must be between 2 and 365")
     if len(password) < 16:
         raise ValueError("KASHER_BACKUP_PASSWORD must have at least 16 characters")
     source = source.resolve()
@@ -110,9 +117,20 @@ def run_once(source: Path, backup_dir: Path, password: str, *, keep: int = 14,
             # Never retain an unverified "success" backup or prune other copies.
             target.unlink(missing_ok=True)
             raise
+        offsite_result = None
+        if offsite_dir is not None:
+            # Import at call time to keep standalone scheduled and mirroring
+            # commands usable without circular module initialization.
+            from offsite_backup import mirror_verified_backup
+            offsite_result = mirror_verified_backup(
+                target, offsite_dir, password, scratch=scratch_dir, keep=offsite_keep)
+        # Do NOT prune good local backups until an enabled remote mirror passed.
         removed = _safe_prune(backup_dir, keep)
-        return {"status": "verified", "backup": name, "bytes": target.stat().st_size,
-                "retained": keep, "pruned": removed}
+        outcome = {"status": "verified", "backup": name, "bytes": target.stat().st_size,
+                   "retained": keep, "pruned": removed}
+        if offsite_result is not None:
+            outcome["offsite"] = offsite_result
+        return outcome
     finally:
         lock_file.unlink(missing_ok=True)
 
@@ -122,11 +140,18 @@ def main() -> None:
     parser.add_argument("database", type=Path)
     parser.add_argument("backup_directory", type=Path)
     parser.add_argument("--keep", type=int, default=14)
+    parser.add_argument("--offsite-directory", type=Path,
+                        help="Optional protected secondary backup directory or mounted share")
+    parser.add_argument("--scratch", type=Path,
+                        help="Required with --offsite-directory; trusted encrypted local scratch")
+    parser.add_argument("--offsite-keep", type=int, default=30)
     args = parser.parse_args()
     password = os.environ.get("KASHER_BACKUP_PASSWORD", "")
     if len(password) < 16:
         parser.error("Inject KASHER_BACKUP_PASSWORD from an approved secrets vault (16+ characters)")
-    outcome = run_once(args.database, args.backup_directory, password, keep=args.keep)
+    outcome = run_once(args.database, args.backup_directory, password,
+                       keep=args.keep, offsite_dir=args.offsite_directory,
+                       scratch_dir=args.scratch, offsite_keep=args.offsite_keep)
     print(json.dumps(outcome, ensure_ascii=False))
 
 

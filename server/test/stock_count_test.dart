@@ -45,7 +45,7 @@ void main() {
     return p;
   }
   Map<String,Object?> open(Principal user)=>
-    as(user,'count_open',{'branch_id':branch,'warehouse_id':warehouse,
+    act(user,'count_open',{'branch_id':branch,'warehouse_id':warehouse,
       'reason':'جرد وردية ميداني'});
   Map<String,Object?> line(String id)=>(
     engine.readCount(stock,id)['lines'] as List).cast<Map<String,Object?>>().single;

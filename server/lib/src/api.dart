@@ -78,6 +78,9 @@ class KasherApi {
       search:r.url.queryParameters['q'] ?? '')));
     router.get('/api/v1/customers', (Request r)=>_json(engine.listParties(_p(r),customers:true)));
     router.get('/api/v1/suppliers', (Request r)=>_json(engine.listParties(_p(r),customers:false)));
+    router.get('/api/v1/lots', (Request r)=>_json(engine.listLots(_p(r),_branch(r),
+      warehouseId:r.url.queryParameters['warehouse_id'],
+      productId:r.url.queryParameters['product_id'])));
     router.get('/api/v1/stock', (Request r)=>_json(engine.listStock(_p(r),_branch(r))));
     router.get('/api/v1/documents', (Request r)=>_json(engine.listDocuments(_p(r),_branch(r))));
     router.get('/api/v1/documents/<id>', (Request r,String id)=>_json(engine.readDocument(_p(r),id)));

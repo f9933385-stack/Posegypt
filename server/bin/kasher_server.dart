@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:args/args.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:kasher_server/src/api.dart';
@@ -6,6 +7,7 @@ import 'package:kasher_server/src/engine.dart';
 import 'package:kasher_server/src/security.dart';
 import 'package:kasher_server/src/store.dart';
 import 'package:kasher_server/src/network_policy.dart';
+import 'package:kasher_server/src/licensing.dart';
 
 Future<void> main(List<String> args) async {
   final parser=ArgParser()
@@ -56,8 +58,33 @@ Future<void> main(List<String> args) async {
     stderr.writeln('TLS certificate/key could not be read');
     store.dispose();exitCode=2;return;
   }
+  Map<String,List<int>> trustKeys={};
+  final remote=!isLoopbackBind(host);
+  try {
+    final configured=Platform.environment['KASHER_LICENSE_PUBLIC_KEYS_JSON'];
+    if(configured!=null && configured.trim().isNotEmpty) {
+      final parsed=jsonDecode(configured);
+      if(parsed is! Map || parsed.isEmpty) {
+        throw const FormatException('Expected JSON map of key_id to Base64URL Ed25519 public key');
+      }
+      for(final entry in parsed.entries) {
+        if(entry.key is! String || entry.value is! String) {
+          throw const FormatException('Invalid license public key map');
+        }
+        trustKeys[entry.key as String]=base64Url.decode(
+          base64Url.normalize(entry.value as String));
+      }
+    }
+    if(remote && trustKeys.isEmpty) {
+      throw const FormatException('Non-local branch service requires KASHER_LICENSE_PUBLIC_KEYS_JSON');
+    }
+    validateLicenseTrustKeys(trustKeys);
+  } on FormatException catch(e) {
+    stderr.writeln('Invalid license verifier configuration: ${e.message}');
+    store.dispose();exitCode=2;return;
+  }
   final api=KasherApi(engine,AuthService(store),
-    enforceDevices:!isLoopbackBind(host));
+    enforceDevices:remote,enforceLicenses:remote,licenseTrustKeys:trustKeys);
   final server=await shelf_io.serve(api.handler,host,port,
     securityContext:transport,poweredByHeader:null);
   stdout.writeln('Kasher branch service running at ${transport==null?'http':'https'}://${server.address.host}:${server.port}');

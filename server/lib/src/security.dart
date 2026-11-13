@@ -32,7 +32,8 @@ bool safeEqual(String a, String b) {
 class Principal {
   final String id, tenantId, role, name;
   final String? branchId;
-  Principal(this.id,this.tenantId,this.branchId,this.role,this.name);
+  final String? deviceId;
+  Principal(this.id,this.tenantId,this.branchId,this.role,this.name,{this.deviceId});
   bool get isOwner => role == 'owner';
   bool get isManager => role == 'manager';
 }
@@ -83,7 +84,7 @@ class AuthService {
     if (u == null) return null;
     if(u['session_device_id']!=null && u['enrolled_device_active']!=1) return null;
     if(requireDevice && u['session_device_id']==null) return null;
-    return Principal(u['id'] as String,u['tenant_id'] as String,u['branch_id'] as String?,u['role'] as String,u['username'] as String);
+    return Principal(u['id'] as String,u['tenant_id'] as String,u['branch_id'] as String?,u['role'] as String,u['username'] as String,deviceId:u['session_device_id'] as String?);
   }
   void logout(String token) => store.exec('DELETE FROM sessions WHERE token_hash=?',[hashToken(token)]);
 }

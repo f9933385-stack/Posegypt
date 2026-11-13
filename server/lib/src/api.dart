@@ -4,15 +4,26 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 import 'engine.dart';
 import 'devices.dart';
+import 'licensing.dart';
 import 'security.dart';
 
 class KasherApi {
   final PosEngine engine;
   final AuthService auth;
   final bool enforceDevices;
+  final bool enforceLicenses;
   final DeviceRegistry devices;
-  KasherApi(this.engine,this.auth,{this.enforceDevices=false})
-    : devices=DeviceRegistry(auth.store);
+  final DeviceLicensing licensing;
+  KasherApi(this.engine,this.auth,{
+    this.enforceDevices=false,
+    this.enforceLicenses=false,
+    Map<String,List<int>> licenseTrustKeys=const {},
+  }) : devices=DeviceRegistry(auth.store),
+       licensing=DeviceLicensing(auth.store,trustKeys:licenseTrustKeys) {
+    if(enforceLicenses && licenseTrustKeys.isEmpty) {
+      throw StateError('License enforcement requires a trusted Ed25519 public key');
+    }
+  }
   final Map<String,List<DateTime>> _loginFailures={};
 
   Response _json(Object? value,{int status=200}) => Response(status,body:jsonEncode(value),
@@ -43,6 +54,7 @@ class KasherApi {
   Future<Response> _write(Request r,String command) async {
     final p=_p(r), key=r.headers['idempotency-key'];
     if(key==null) throw DomainError('Idempotency-Key header required',400);
+    if(enforceLicenses) await licensing.requireWritable(p);
     return _json(engine.command(p,command,await _body(r),key),status:201);
   }
   Handler get handler {
@@ -98,6 +110,21 @@ class KasherApi {
       }
       return _json(devices.revoke(actor,body['device_id'] as String,
         body['reason'] as String),status:201);
+    });
+    router.get('/api/v1/licenses/status', (Request r) async {
+      return _json(await licensing.status(_p(r)));
+    });
+    router.post('/api/v1/licenses/activate', (Request r) async {
+      final actor=_p(r),key=r.headers['idempotency-key'];
+      if(key==null || key.length<16 || key.length>128) {
+        throw DomainError('Idempotency-Key header required (16..128)',400);
+      }
+      final input=await _body(r);
+      if(input['license_token'] is! String) {
+        throw DomainError('Signed license_token required',400);
+      }
+      return _json(await licensing.activate(actor,input['license_token'] as String),
+        status:201);
     });
     router.get('/api/v1/me', (Request r) {
       final p=_p(r);

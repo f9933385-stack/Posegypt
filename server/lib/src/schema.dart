@@ -344,3 +344,26 @@ const schemaV8 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_branch_shipment_lots_shipment
      ON branch_shipment_lots(shipment_id)'''
 ];
+
+
+/// V9: signed annual license for every enrolled POS device. Only the vendor
+/// holds private signing keys; branch databases contain signed grants.
+const schemaV9 = <String>[
+  '''CREATE TABLE IF NOT EXISTS device_licenses (
+    device_id TEXT PRIMARY KEY REFERENCES registered_devices(id),
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    serial TEXT NOT NULL UNIQUE,
+    key_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    activated_by TEXT NOT NULL REFERENCES users(id),
+    activated_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_device_licenses_tenant_expiry
+    ON device_licenses(tenant_id,expires_at)''',
+  '''CREATE TABLE IF NOT EXISTS license_clock_guards (
+    device_id TEXT PRIMARY KEY REFERENCES registered_devices(id),
+    max_seen_at TEXT NOT NULL
+  )'''
+];

@@ -21,7 +21,7 @@ contains `start_windows.ps1` if the launch script is present in the source commi
 The project is **not** ready for a real supermarket, despite green builds.
 Remaining blockers include branch-to-cloud sync and conflict reconciliation;
 separate-branch transfer dispatch and receipt; managed TLS certificate trust, device attestation, credential rotation and hardware-backed renewal for LAN devices;
-fully reconciled shifts and role overrides; lot-aware preparation/recalls and purchase-side unit conversion;
+fully reconciled shifts and role overrides; lot-aware preparation/recalls and advanced supplier return/unit pricing rules;
 price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
 backup automation and full disaster-recovery drills; tested thermal and label printers and
 electronic scale models; Egyptian tax/e-invoice compliance; signed Android
@@ -74,3 +74,9 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - LAN mode requires device and employee credentials; loopback retains explicitly local initial enrollment.
 - Hardened Android manifest auto-backup and cleartext settings in CI.
 - Device pairing is NOT a substitute for managed MDM, hardware attestation, mTLS, intrusion monitoring or complete security review. [Arabic enrollment guide](DEVICE_PAIRING_AR.md).
+
+## Carton purchasing
+- Receiving a carton/box by `unit_id` and integer `unit_count` converts to base inventory thousandths with independent carton purchase cost and exact invoice gross.
+- Existing discounts, payment methods, supplier payable, FEFO receipt and partial purchase returns remain on the same SQL transaction and integer-piaster ledger.
+- Flutter purchasing now lets the user switch between base units and configured cartons/boxes, with different quantity/cost labels.
+- **Still requires:** commercial device/batch receipt pilot, supplier order approvals, unit-scale conversion policy and verified refund rules.

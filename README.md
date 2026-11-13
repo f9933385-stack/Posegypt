@@ -139,3 +139,7 @@ The Dart server refuses non-loopback HTTP and requires --tls-cert / --tls-key fo
 ### Branch device enrollment (schema v6)
 
 The branch now uses per-device credentials, owner/manager-issued one-time 10-minute pairing tickets, Windows/Android OS-protected client secrets and revocable device-bound sessions in LAN mode. For first-branch registration and a real device revocation walkthrough, read the [Arabic device pairing guide](docs/DEVICE_PAIRING_AR.md). **Not** hardware device attestation or complete production authorization.
+
+### Carton purchases and goods receiving
+
+Purchase invoices may now receive configured product units (box/carton) by integer `unit_count` with independent exact `unit_cost_minor` per carton; quantities convert to base-stock thousandths. Paid invoices, supplier payables, expiry-lot intake and partial supplier returns remain transactionally audited. The Arabic Flutter purchases screen exposes unit selection. See [API purchase-by-carton semantics](docs/API.md#purchase-by-carton--alternate-unit).

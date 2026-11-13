@@ -42,7 +42,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/auth/login \
 | `POST /api/v1/customers` | `name`, optional `phone`, `credit_limit_minor` |
 | `POST /api/v1/suppliers` | `name`, optional `phone` |
 | `POST /api/v1/branches` | Owner only: `name`, `code` |
-| `POST /api/v1/purchases` | `branch_id`, `supplier_id`, `lines` with `product_id`, `qty_milli`, `unit_cost_minor`; tracked products additionally require `lot_no`, `expires_on` (YYYY-MM-DD); optional `payments` |
+| `POST /api/v1/purchases` | `branch_id`, `supplier_id`, `lines` with `product_id` and either `qty_milli` **or** `unit_id` + integer `unit_count`, plus `unit_cost_minor` (per chosen unit); tracked products additionally require `lot_no`, `expires_on` (YYYY-MM-DD); optional `payments` |
 | `POST /api/v1/sales` | `branch_id`, `lines`: either `product_id` + `qty_milli` OR `product_id` + `unit_id` + `unit_count`; optional `customer_id`, `payments` |
 | `POST /api/v1/sales/returns` | `branch_id`, `original_id`, `refund_method` (`cash`/`credit`), `lines` with `original_line_id`, `qty_milli` |
 | `POST /api/v1/purchases/returns` | `branch_id`, `original_id`, `lines` with `original_line_id`, `qty_milli` |
@@ -144,3 +144,17 @@ In non-loopback HTTPS mode, `/api/v1/auth/login` requires `device_id` and `devic
 | `POST /api/v1/devices/revoke` | owner/manager | `device_id`, `reason`; revokes sessions |
 
 Initial pairing on the same server uses the local loopback-only mode; production remote operation requires HTTPS and enrollment. See [Arabic pairing guide](DEVICE_PAIRING_AR.md).
+
+## Purchase by carton / alternate unit
+
+For a product with a 12-piece carton (`factor_milli=12000`), a purchase line with `unit_id`, `unit_count=3`, and `unit_cost_minor=185` records **36 base pieces and a line gross of 555 piasters**. It stores the alternate unit identity, count and exact line gross in the immutable document; the base-unit stock ledger increases by 36000 thousandths and its inventory value by 555 piasters. `unit_cost_minor` is the purchase cost of each **carton**, not of a base piece. Optional `bonus_qty_milli` adds free units in base-unit thousandths without inflating invoice gross or stock valuation. Expiry-controlled goods require a real lot number and ISO expiry even for carton purchases. A purchase line must not mix `unit_id` with `qty_milli` or send `unit_count` without `unit_id`.
+
+Example:
+
+```json
+{"branch_id":"<branch-id>","supplier_id":"<supplier-id>",
+ "lines":[{"product_id":"<product-id>","unit_id":"<carton-unit-id>",
+ "unit_count":3,"unit_cost_minor":185}],"payments":[]}
+```
+
+Returns still specify **base-unit** `qty_milli` against an immutable original purchase line, preserving cumulative fractional-piaster rounding on partial returns. The feature does not yet support purchase-order approvals or supplier EDI.

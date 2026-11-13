@@ -507,19 +507,41 @@ class PosEngine {
     for(final x in _inputLines(input)) {
       final product=nonEmpty(x['product_id'],'product_id');
       final data=_product(p,product);
-      final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
+      final unitId=x['unit_id'];
+      late final int qty,price,gross;
+      int? unitCount;
+      if(unitId!=null) {
+        if(x.containsKey('qty_milli')) throw DomainError('Use unit_count or qty_milli, not both');
+        final unit=_productUnit(p,product,nonEmpty(unitId,'unit_id'));
+        unitCount=strictInt(x['unit_count'],'unit_count',min:1);
+        if(unitCount>100000 || (unit['factor_milli'] as int)>1000000000) {
+          throw DomainError('Purchase unit quantity or factor too large');
+        }
+        qty=unitCount*(unit['factor_milli'] as int);
+        price=strictInt(x['unit_cost_minor'],'unit_cost_minor');
+        if(price>1000000000) throw DomainError('Purchase unit cost too large');
+        gross=price*unitCount;
+      } else {
+        if(x.containsKey('unit_count')) throw DomainError('unit_count requires unit_id');
+        qty=strictInt(x['qty_milli'],'qty_milli',min:1);
+        price=strictInt(x['unit_cost_minor'],'unit_cost_minor');
+        gross=lineAmount(price,qty);
+      }
       final bonus=strictInt(x['bonus_qty_milli'] ?? 0,'bonus_qty_milli');
-      final price=strictInt(x['unit_cost_minor'],'unit_cost_minor');
+      if(qty>1000000000000 || qty+bonus>1000000000000) {
+        throw DomainError('Purchase quantity exceeds supported limit');
+      }
       final tracked=(data['track_expiry'] as int)==1;
       final lotNo=tracked?nonEmpty(x['lot_no'],'lot_no'):null;
       final expiry=tracked?_validExpiry(x['expires_on'],receiving:true):null;
       if(!tracked && (x['lot_no']!=null || x['expires_on']!=null)) {
         throw DomainError('Expiry-lot input requires a product with track_expiry enabled');
       }
-      final gross=lineAmount(price,qty), disc=strictInt(x['discount_minor'] ?? 0,'discount_minor');
+      final disc=strictInt(x['discount_minor'] ?? 0,'discount_minor');
       if(disc>gross) throw DomainError('Discount exceeds purchase line');
       final vat=taxAmount(gross-disc,data['tax_rate_bp'] as int);
-      items.add({'product_id':product,'qty':qty+bonus,'ordered_qty':qty,'price':price,'discount':disc,
+      items.add({'product_id':product,'qty':qty+bonus,'ordered_qty':qty,'price':price,
+        'gross':gross,'unit_id':unitId,'unit_count':unitCount,'discount':disc,
         'tax':vat,'net':gross-disc,'name':data['name_ar'],
         'lot_no':lotNo,'expires_on':expiry});
       subtotal+=gross;discount+=disc;tax+=vat;
@@ -531,7 +553,9 @@ class PosEngine {
       {'supplier_id':supplier,'lines':items,'payments':payments});
     for(final line in items) {
       final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
-        line['discount'] as int,line['tax'] as int,line['net'] as int);
+        line['discount'] as int,line['tax'] as int,line['net'] as int,
+        grossMinor:line['gross'] as int,unitId:line['unit_id'] as String?,
+        unitCount:line['unit_count'] as int?);
       _stock(p,branch,warehouse,line['product_id'] as String,line['qty'] as int,line['net'] as int,'purchase',doc);
       if(line['lot_no']!=null) {
         _receiveLot(warehouse,line['product_id'] as String,line['lot_no'] as String,

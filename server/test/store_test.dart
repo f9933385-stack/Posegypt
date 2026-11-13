@@ -17,11 +17,11 @@ void main() {
 
   test('initial migration and reopen are idempotent', () {
     final first=DatabaseStore.open(path);
-    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 8);
+    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 9);
     expect(first.first("SELECT name FROM sqlite_master WHERE name='products'")?['name'], 'products');
     first.dispose();
     final second=DatabaseStore.open(path);
-    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 8);
+    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 9);
     second.dispose();
   });
 
@@ -39,7 +39,7 @@ void main() {
     }
     final migrated=DatabaseStore.open(path);
     try {
-      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],8);
+      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],9);
       expect(migrated.first("SELECT name_ar FROM products WHERE id='P'")?['name_ar'],'Old Product');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='product_units'")?['name'],
         'product_units');
@@ -53,6 +53,8 @@ void main() {
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='branch_shipments'")?['name'],'branch_shipments');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='branch_shipment_lots'")?['name'],'branch_shipment_lots');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='registered_devices'")?['name'],'registered_devices');
+      expect(migrated.first("SELECT name FROM sqlite_master WHERE name='device_licenses'")?['name'],'device_licenses');
+      expect(migrated.first("SELECT name FROM sqlite_master WHERE name='license_clock_guards'")?['name'],'license_clock_guards');
       expect(migrated.rows('PRAGMA table_info(sessions)').any((x)=>x['name']=='device_id'),isTrue);
     } finally {
       migrated.dispose();

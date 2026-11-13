@@ -330,11 +330,18 @@ class PosEngine {
       final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
       final bonus=strictInt(x['bonus_qty_milli'] ?? 0,'bonus_qty_milli');
       final price=strictInt(x['unit_cost_minor'],'unit_cost_minor');
+      final tracked=(data['track_expiry'] as int)==1;
+      final lotNo=tracked?nonEmpty(x['lot_no'],'lot_no'):null;
+      final expiry=tracked?_validExpiry(x['expires_on'],receiving:true):null;
+      if(!tracked && (x['lot_no']!=null || x['expires_on']!=null)) {
+        throw DomainError('Expiry-lot input requires a product with track_expiry enabled');
+      }
       final gross=lineAmount(price,qty), disc=strictInt(x['discount_minor'] ?? 0,'discount_minor');
       if(disc>gross) throw DomainError('Discount exceeds purchase line');
       final vat=taxAmount(gross-disc,data['tax_rate_bp'] as int);
       items.add({'product_id':product,'qty':qty+bonus,'ordered_qty':qty,'price':price,'discount':disc,
-        'tax':vat,'net':gross-disc,'name':data['name_ar']});
+        'tax':vat,'net':gross-disc,'name':data['name_ar'],
+        'lot_no':lotNo,'expires_on':expiry});
       subtotal+=gross;discount+=disc;tax+=vat;
     }
     final total=subtotal-discount+tax, payments=_payments(input);
@@ -343,9 +350,14 @@ class PosEngine {
     final doc=_document(p,branch,warehouse,'purchase',supplier,subtotal,discount,tax,total,paid,subtotal-discount,
       {'supplier_id':supplier,'lines':items,'payments':payments});
     for(final line in items) {
-      _line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
+      final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
         line['discount'] as int,line['tax'] as int,line['net'] as int);
       _stock(p,branch,warehouse,line['product_id'] as String,line['qty'] as int,line['net'] as int,'purchase',doc);
+      if(line['lot_no']!=null) {
+        _receiveLot(warehouse,line['product_id'] as String,line['lot_no'] as String,
+          line['expires_on'] as String,line['qty'] as int,'purchase',doc,lineId:lineId);
+        _assertLotMatchesStock(branch,warehouse,line['product_id'] as String);
+      }
     }
     _savePayments(doc,branch,supplier,'out',payments);
     _post(p,branch,'purchase',doc,[
@@ -417,10 +429,15 @@ class PosEngine {
     for(final line in items) {
       final cost=_stock(p,branch,warehouse,line['product_id'] as String,-(line['qty'] as int),0,'sale',doc);
       cogs+=cost;
-      _line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
+      final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
         line['discount'] as int,line['tax'] as int,cost,
         grossMinor:line['gross'] as int,unitId:line['unit_id'] as String?,
         unitCount:line['unit_count'] as int?);
+      if(_tracksLots(p,line['product_id'] as String)) {
+        _consumeFefo(warehouse,line['product_id'] as String,line['qty'] as int,
+          'sale',doc,lineId:lineId);
+        _assertLotMatchesStock(branch,warehouse,line['product_id'] as String);
+      }
     }
     store.exec('UPDATE documents SET cost_minor=? WHERE id=?',[cogs,doc]);
     _savePayments(doc,branch,customer,'in',payments);
@@ -487,7 +504,26 @@ class PosEngine {
     final cost=strictInt(input['added_cost_minor'] ?? 0,'added_cost_minor');
     if(qty>0 && cost==0) throw DomainError('Positive adjustment requires valuation');
     final reason=nonEmpty(input['reason'],'reason');
+    final tracked=_tracksLots(p,product);
+    String? batchId,lotNo,expiresOn;
+    if(tracked) {
+      if(qty>0) {
+        lotNo=nonEmpty(input['lot_no'],'lot_no');
+        expiresOn=_validExpiry(input['expires_on'],receiving:true);
+      } else {
+        batchId=nonEmpty(input['batch_id'],'batch_id');
+        _lot(warehouse,product,batchId);
+      }
+    }
     final id=_id(),deltaCost=_stock(p,branch,warehouse,product,qty,cost,'adjustment',id);
+    if(tracked) {
+      if(qty>0) {
+        _receiveLot(warehouse,product,lotNo!,expiresOn!,qty,'adjustment_add',id);
+      } else {
+        _moveLot(warehouse,product,batchId!,qty,'adjustment_remove',id);
+      }
+      _assertLotMatchesStock(branch,warehouse,product);
+    }
     _post(p,branch,'adjustment',id,qty>0
       ? [LedgerLine('INVENTORY',debit:deltaCost),LedgerLine('INVENTORY_ADJUSTMENT',credit:deltaCost)]
       : [LedgerLine('INVENTORY_ADJUSTMENT',debit:deltaCost),LedgerLine('INVENTORY',credit:deltaCost)]);
@@ -510,6 +546,15 @@ class PosEngine {
     final id=_id();
     final cost=_stock(p,branch,source,product,-qty,0,'warehouse_transfer_out',id);
     _stock(p,branch,destination,product,qty,cost,'warehouse_transfer_in',id);
+    if(_tracksLots(p,product)) {
+      final picked=_consumeFefo(source,product,qty,'warehouse_transfer_out',id);
+      for(final row in picked) {
+        _receiveLot(destination,product,row['lot_no'] as String,row['expires_on'] as String,
+          row['qty_milli'] as int,'warehouse_transfer_in',id);
+      }
+      _assertLotMatchesStock(branch,source,product);
+      _assertLotMatchesStock(branch,destination,product);
+    }
     _audit(p,'warehouse.transfer',id,{'product_id':product,
       'qty_milli':qty,'source_warehouse_id':source,
       'destination_warehouse_id':destination,'cost_minor':cost},branch);
@@ -526,6 +571,9 @@ class PosEngine {
     final output=nonEmpty(input['output_product_id'],'output_product_id');
     if(raw==output) throw DomainError('Raw and output products must be different');
     _product(p,raw);_product(p,output);
+    if(_tracksLots(p,raw) || _tracksLots(p,output)) {
+      throw DomainError('Expiry-tracked preparation needs lot-aware production workflow',409);
+    }
     final consumed=strictInt(input['input_qty_milli'],'input_qty_milli',min:1);
     final produced=strictInt(input['output_qty_milli'],'output_qty_milli',min:1);
     final id=_id(), cost=_stock(p,branch,warehouse,raw,-consumed,0,'preparation',id);
@@ -654,8 +702,16 @@ class PosEngine {
       {'original_id':original,'lines':lines,'refund_method':refundMethod},original:original);
     for(final line in lines) {
       _stock(p,branch,warehouse,line['product_id'] as String,line['qty'] as int,line['cost'] as int,'sale_return',doc);
-      _line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
+      final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
         originalLine:line['original_line_id'] as String);
+      if(_tracksLots(p,line['product_id'] as String)) {
+        if(warehouse!=doc0['warehouse_id']) {
+          throw DomainError('Tracked returns must be received in original warehouse',409);
+        }
+        _restoreSaleLots(warehouse,line['product_id'] as String,
+          line['original_line_id'] as String,line['qty'] as int,doc,lineId);
+        _assertLotMatchesStock(branch,warehouse,line['product_id'] as String);
+      }
     }
     if(refundMethod=='cash') {
       _savePayments(doc,branch,customer,'out',[{'method':'cash','amount_minor':total}]);
@@ -710,8 +766,16 @@ class PosEngine {
     final doc=_documentWithId(docId,p,branch,warehouse,'purchase_return',supplier,net,0,tax,total,refundMethod=='cash'?total:0,stockCost,
       {'original_id':original,'lines':lines,'refund_method':refundMethod},original:original);
     for(final line in lines) {
-      _line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
+      final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
         originalLine:line['original_line_id'] as String);
+      if(_tracksLots(p,line['product_id'] as String)) {
+        if(warehouse!=doc0['warehouse_id']) {
+          throw DomainError('Tracked supplier returns require original warehouse',409);
+        }
+        _returnPurchaseLot(warehouse,line['product_id'] as String,
+          line['original_line_id'] as String,line['qty'] as int,doc,lineId);
+        _assertLotMatchesStock(branch,warehouse,line['product_id'] as String);
+      }
     }
     if(refundMethod=='cash') {
       _savePayments(doc,branch,supplier,'in',[{'method':'cash','amount_minor':total}]);
@@ -995,8 +1059,8 @@ class PosEngine {
       ORDER BY b.expires_on,b.lot_no LIMIT 500''',
       [branch,p.tenantId,warehouseId,warehouseId,productId,productId]);
     final today=_todayUtc();
-    return list.map((x)=>{...x,'expired':(x['expires_on'] as String?)?.compareTo(today)<0,
-      'sellable_qty_milli':(x['expires_on'] as String?)?.compareTo(today)<0
+    return list.map((x)=>{...x,'expired': x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0,
+      'sellable_qty_milli': x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0
          ?0:x['qty_milli']}).toList();
   }
 

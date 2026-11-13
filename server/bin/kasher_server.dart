@@ -16,6 +16,8 @@ Future<void> main(List<String> args) async {
     ..addOption('port',defaultsTo:'8787')
     ..addOption('tls-cert',help:'PEM certificate chain for non-loopback HTTPS')
     ..addOption('tls-key',help:'PEM private key for non-loopback HTTPS')
+    ..addFlag('license-enforced',defaultsTo:false,
+      help:'Enforce signed annual device licenses even on localhost')
     ..addOption('name',defaultsTo:'سوبرماركت جديد')
     ..addOption('branch',defaultsTo:'الفرع الرئيسي')
     ..addOption('username',defaultsTo:'admin');
@@ -60,6 +62,7 @@ Future<void> main(List<String> args) async {
   }
   Map<String,List<int>> trustKeys={};
   final remote=!isLoopbackBind(host);
+  final enforceLicense=remote || options['license-enforced']==true;
   try {
     final configured=Platform.environment['KASHER_LICENSE_PUBLIC_KEYS_JSON'];
     if(configured!=null && configured.trim().isNotEmpty) {
@@ -75,7 +78,7 @@ Future<void> main(List<String> args) async {
           base64Url.normalize(entry.value as String));
       }
     }
-    if(remote && trustKeys.isEmpty) {
+    if(enforceLicense && trustKeys.isEmpty) {
       throw const FormatException('Non-local branch service requires KASHER_LICENSE_PUBLIC_KEYS_JSON');
     }
     validateLicenseTrustKeys(trustKeys);
@@ -84,7 +87,7 @@ Future<void> main(List<String> args) async {
     store.dispose();exitCode=2;return;
   }
   final api=KasherApi(engine,AuthService(store),
-    enforceDevices:remote,enforceLicenses:remote,licenseTrustKeys:trustKeys);
+    enforceDevices:enforceLicense,enforceLicenses:enforceLicense,licenseTrustKeys:trustKeys);
   final server=await shelf_io.serve(api.handler,host,port,
     securityContext:transport,poweredByHeader:null);
   stdout.writeln('Kasher branch service running at ${transport==null?'http':'https'}://${server.address.host}:${server.port}');

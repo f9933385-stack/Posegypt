@@ -6,7 +6,7 @@ GitHub Actions workflow: `.github/workflows/import-kasher-source.yml`.
 ## What CI verifies
 - Static analysis and unit tests for the Dart/Shelf/SQLite branch server
 - Static analysis (non-fatal deprecation info) and unit tests for Flutter app
-- Python SQLite schema check, audit checker and encrypted backup round-trip
+- Python SQLite schema check, audit checker, encrypted backup round-trip and verified retention tests
 - Android **debug** APK build, uploaded as an Actions artifact
 - Windows **release-mode UI binary** and compiled branch-service executable, packaged together as an Actions artifact
 - Compiled Windows branch-service initialization, authenticated API purchase and sale smoke test (see latest workflow run)
@@ -21,9 +21,9 @@ contains `start_windows.ps1` if the launch script is present in the source commi
 The project is **not** ready for a real supermarket, despite green builds.
 Remaining blockers include branch-to-cloud sync and conflict reconciliation;
 separate-branch transfer dispatch and receipt; TLS/pairing for LAN devices;
-fully reconciled shifts and role overrides; expiry/lot and multi-unit flows;
-price/promotional rules; audited signed annual per-device licensing; scheduled
-encrypted backups with restore tests; tested thermal and label printers and
+fully reconciled shifts and role overrides; expiry/lot and purchase-side unit conversion;
+price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
+backup automation and full disaster-recovery drills; tested thermal and label printers and
 electronic scale models; Egyptian tax/e-invoice compliance; signed Android
 release; real Windows installer; accessibility and security review; and the
 complete 34-domain acceptance test suite.
@@ -31,3 +31,9 @@ complete 34-domain acceptance test suite.
 Do not expose `--bind=0.0.0.0` on an untrusted network; it is unencrypted HTTP.
 The `start_windows.ps1` launcher binds to localhost only.
 The Android debug build needs an isolated test LAN setup with a reachable branch host.
+
+## New hardening checkpoints
+- Schema v2 migration retains existing v1 records and rejects unknown future versions.
+- POS supports alternate carton/box units with exact line gross, barcode lookup and cumulative return rounding.
+- Encrypted backup rotation runner: `python tools/scheduled_backup.py DATABASE PRIVATE_BACKUP_DIR --keep 14`. It verifies restore before retaining/pruning; **host scheduler, vault and offsite restore drill still required**.
+- Read [`docs/PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for Arabic operations and release restrictions.

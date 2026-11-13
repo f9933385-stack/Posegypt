@@ -20,7 +20,8 @@ curl -X POST http://127.0.0.1:8787/api/v1/auth/login \
 | `GET /api/v1/me` | Current user role and permitted branch |
 | `GET /api/v1/users` | Owner-only list with no password hashes |
 | `GET /api/v1/branches` | Tenant/role-filtered branches |
-| `GET /api/v1/products?q=...` | Search up to 100 products by Arabic name, SKU, barcode |
+| `GET /api/v1/products?q=...` | Search up to 100 products by Arabic name, SKU, base barcode or alternate-unit barcode (matching unit ID returned) |
+| `GET /api/v1/units?product_id=...` | Listed active carton/alternate units for a product within the tenant |
 | `GET /api/v1/customers` | Tenant customers (outstanding balance for manager/owner) |
 | `GET /api/v1/suppliers` | Suppliers; restricted to owner/manager/purchasing |
 | `GET /api/v1/stock?branch_id=...` | Quantity and value (cost hidden from cashier/viewer) |
@@ -36,11 +37,12 @@ curl -X POST http://127.0.0.1:8787/api/v1/auth/login \
 |---|---|
 | `POST /api/v1/users` | Owner only: `username`, `password`, `role`, `branch_id` |
 | `POST /api/v1/products` | `sku`, `name_ar`, `sell_price_minor`; optional `barcode`, `tax_rate_bp`, `base_unit` |
+| `POST /api/v1/units` | `product_id`, `unit_name`, `factor_milli`, `sell_price_minor`, optional `barcode`. Example: carton of 12 base units has `factor_milli=12000` |
 | `POST /api/v1/customers` | `name`, optional `phone`, `credit_limit_minor` |
 | `POST /api/v1/suppliers` | `name`, optional `phone` |
 | `POST /api/v1/branches` | Owner only: `name`, `code` |
 | `POST /api/v1/purchases` | `branch_id`, `supplier_id`, `lines` with `product_id`, `qty_milli`, `unit_cost_minor`; optional `payments` |
-| `POST /api/v1/sales` | `branch_id`, `lines` with `product_id`, `qty_milli`; optional `customer_id`, `payments` |
+| `POST /api/v1/sales` | `branch_id`, `lines`: either `product_id` + `qty_milli` OR `product_id` + `unit_id` + `unit_count`; optional `customer_id`, `payments` |
 | `POST /api/v1/sales/returns` | `branch_id`, `original_id`, `refund_method` (`cash`/`credit`), `lines` with `original_line_id`, `qty_milli` |
 | `POST /api/v1/purchases/returns` | `branch_id`, `original_id`, `lines` with `original_line_id`, `qty_milli` |
 | `POST /api/v1/customers/receipts` | `branch_id`, `customer_id`, `amount_minor`, `method` |
@@ -75,3 +77,24 @@ Amounts are integer **piasters** (100 piasters = 1 EGP); quantities are integer 
 - `POST /api/v1/shifts/close`: `{"branch_id":"...","shift_id":"...","closing_actual_minor":12345}`. Difference is returned after the count is submitted (blind close); discrepancies are **not** automatically posted as cash adjustment.
 
 Both POST commands require Bearer authorization and unique `Idempotency-Key`; amounts are **integer piasters**. Shift expected cash is opening count plus CASH ledger movement after open. This is a **single shared drawer** design, not independent cashier till attribution.
+
+## Multi-unit / carton sale accounting (schema v2)
+
+For a product sold as individual pieces and as a carton containing 12 pieces,
+create one unit with `factor_milli=12000` and `sell_price_minor=16100`.
+To sell two cartons:
+
+```json
+{"branch_id":"<branch-id>",
+ "lines":[{"product_id":"<product-id>","unit_id":"<carton-unit-id>","unit_count":2}],
+ "payments":[{"method":"cash","amount_minor":32200}]}
+```
+
+The sale debits 24,000 thousandths of base stock but prices the invoice at
+32200 piasters exactly, even if this differs from the base per-piece price.
+The original gross line amount is saved for exact cumulative partial refunds.
+A unit belongs to exactly one product and tenant; duplicate barcodes on a product
+and its alternate units in the same tenant are rejected.
+
+The present purchase endpoint remains base-unit quantities only; automatic
+conversion in purchasing and expiry-lot tracking are not part of this migration.

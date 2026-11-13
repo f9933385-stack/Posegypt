@@ -16,7 +16,7 @@
 
 - **Flutter UI**: Arabic RTL, responsive desktop/tablet layout; login; user management; management dashboard; branch-wide cash shifts; POS with fractional quantities, cash/card/wallet/bank split payment, credit sale; product/stock views; purchase entry; customer/supplier records; expenses; document history.
 - **Branch service**: HTTP REST API backed by SQLite in WAL mode, one transaction per write command, explicit `Idempotency-Key`, PBKDF2 password hashing, hashed expiring opaque sessions, tenant + branch-scoped queries, role authorization, immutable audit trail.
-- **Financial core**: Egyptian piasters as integer values, quantity in thousandths of the smallest base unit, weighted-average inventory cost by warehouse, sales/purchases, full/partial settlement, customer credit limits, supplier payables, posted returns, expense accounting, stock adjustments, raw-to-packaged preparation, journal balancing and sync outbox.
+- **Financial core**: Egyptian piasters as integer values, quantity in thousandths of the smallest base unit, weighted-average inventory cost by warehouse, sales/purchases, full/partial settlement, customer credit limits, supplier payables, posted returns, expense accounting, stock adjustments, raw-to-packaged preparation, journal balancing and sync outbox. Schema v2 adds alternate carton/box units with separate exact selling prices and barcode lookup.
 - **Source**: complete consolidated requirements under [`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md), executable tests in server and Flutter packages, setup scripts.
 
 ## Tech stack
@@ -96,7 +96,7 @@ flutter analyze
 
 ## Remaining production gates
 
-Do not market this as a complete commercial product yet. In particular: hardware printer/scale integrations, LAN TLS and QR pairing, real cloud sync and conflict replay, safe encrypted backups + restore drill, signed yearly per-device licensing (500 EGP), multi-drawer shift controls, complete batch/expiry allocation, unit conversion and advanced price/promotions, real tax/e-invoice integration, cross-branch in-transit transfer, import/export, end-to-end multi-device testing, **production-signed** Windows and Android installers, performance testing and the full 34 acceptance scenarios remain to be implemented and verified. The source is structured for those next phases.
+Do not market this as a complete commercial product yet. In particular: hardware printer/scale integrations, LAN TLS and QR pairing, real cloud sync and conflict replay, secure offsite scheduled backups + field recovery drills, signed yearly per-device licensing (500 EGP), multi-drawer shift controls, complete batch/expiry allocation, purchase-side unit conversion and advanced price/promotions, real tax/e-invoice integration, cross-branch in-transit transfer, import/export, end-to-end multi-device testing, **production-signed** Windows and Android installers, performance testing and the full 34 acceptance scenarios remain to be implemented and verified. The source is structured for those next phases.
 
 Read [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and [`docs/SECURITY.md`](docs/SECURITY.md) before extending or deploying.
 
@@ -114,3 +114,12 @@ Read [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and [`docs
   [`docs/PUBLISH_TO_GITHUB.md`](docs/PUBLISH_TO_GITHUB.md). Sources are imported on feature/import-kasher-source, subject to CI verification.
 
 For a dated verification summary, read [`docs/VERIFICATION_2026-11-12.md`](docs/VERIFICATION_2026-11-12.md).
+
+## Operator improvements (development branch)
+
+- [Arabic commercial-readiness and recovery runbook](docs/PRODUCTION_READINESS_AR.md).
+- [Exact multi-unit/carton sale REST API](docs/API.md#multi-unit--carton-sale-accounting-schema-v2).
+- [Backup runner](tools/scheduled_backup.py): AES-256-GCM verified restore and conservative retention. Requires approved secrets injection and an external host scheduler before unattended operation.
+- Database schema migrations are additive, with a future-version guard; old records are not silently removed.
+
+**Never deploy this development build to a live supermarket without completing the remaining release gates.**

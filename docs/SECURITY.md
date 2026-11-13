@@ -8,7 +8,7 @@ This is **not yet an internet-facing or production-ready financial service**.
 4. **Database:** SQLite foreign keys and WAL are enabled. Writes are synchronous `BEGIN IMMEDIATE` transactions; stock has no-negative-quantity constraint. Database file must remain private to Windows host, backed up safely; never mount to multiple clients over SMB. No encrypted-at-rest policy shipped.
 5. **Payment methods:** cash/card/wallet/bank are accounting labels, not integrations. No real payment card information, CVV, or banking credentials should be entered or stored.
 6. **Local files:** `data/`, `.env`, `.key`, `.pem`, `.db`, WAL/SHM are gitignored. Also restrict filesystem ACLs for the production host, logs, and backups.
-7. **Testing to add:** rate limiting and lockouts on login, penetration test, denied access tests, TLS and rotation, safe backup restore, clock manipulation guard, digital signatures for licenses, key management, logging and monitoring.
+7. **Testing to add:** durable distributed rate limiting, penetration test, denied access tests, TLS and rotation, clock manipulation guard, digital signatures for licenses, key management, logging and monitoring. Basic login throttling and backup restore tests exist but do not replace field validation.
 8. **Legal:** do not claim Egyptian e-invoice/e-receipt compliance; tax fields are for internal calculations only pending current legal review.
 
 For testing on Android, modern Android may block cleartext by default; **do not disable this globally for a production build**. Supply a TLS endpoint and certificate trust design when device integration is ready.
@@ -17,12 +17,15 @@ For testing on Android, modern Android may block cleartext by default; **do not 
 
 `tools/backup_database.py` creates an **AES-256-GCM encrypted, authenticated**
 SQLite-consistent snapshot, using a password-derived key (scrypt). It never
-prints the password or passes it as a CLI argument. Backups are **not automatic**:
-a human or the host OS scheduler must run the command, monitor its exit status,
-and periodically restore-test it. During backup, a short-lived **unencrypted
-SQLite snapshot** is created in the destination folder and deleted on normal
-completion; use a private, encrypted-at-rest host folder, not a public/cloud
-synced folder. Avoid crash-residual `.kasher-*` files. Do not use the source
+prints the password or passes it as a CLI argument. 
+`tools/scheduled_backup.py` provides a verified **one-shot backup cycle** with
+restoration, selected accounting audits, exclusive lock and safe retention.
+It does not install a scheduler, sync to cloud, or securely store the password:
+a human or host OS scheduler with a separate approved vault must invoke it,
+monitor failures and complete periodic field restore drills. During backup, a short-lived **unencrypted
+SQLite snapshot** is created beside the source database on the trusted branch
+host (not next to encrypted backup output) and deleted on normal completion;
+use encrypted-at-rest NTFS volume and a private host directory. Avoid crash-residual `.kasher-*` files. Do not use the source
 DB file as a backup target. Before **restoring**, stop the server; the script
 refuses to overwrite any existing file. Keep the backup password in a secure
 password manager. No Google Drive upload is implemented.
@@ -31,9 +34,9 @@ Example on PowerShell:
 
 ```powershell
 python -m pip install -r tools/requirements-backup.txt
-$env:KASHER_BACKUP_PASSWORD = Read-Host "Backup passphrase (16+ chars)"
-python tools/backup_database.py backup server/data/kasher.sqlite3 D:/KasherSecure/kasher-2026-11-12.kasherbak
-python tools/backup_database.py restore D:/KasherSecure/kasher-2026-11-12.kasherbak D:/KasherRestore/verified.sqlite3
+# Inject KASHER_BACKUP_PASSWORD from an approved secrets vault at runtime
+python tools/scheduled_backup.py server/data/kasher.sqlite3 D:/KasherSecure --keep 14
+python tools/backup_database.py restore D:/KasherSecure/CHOSEN_FILE.kasherbak D:/KasherRestore/verified.sqlite3
 python tools/audit_database.py D:/KasherRestore/verified.sqlite3
 Remove-Item Env:KASHER_BACKUP_PASSWORD
 ```
@@ -41,3 +44,5 @@ Remove-Item Env:KASHER_BACKUP_PASSWORD
 Running `tools/audit_database.py` against a **snapshot** is preferred. A
 passing audit only checks selected database invariants, not business or
 regulatory correctness.
+
+Consult [`PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for the complete Arabic backup and restore runbook. Backups are not offsite until they are separately and securely transferred; cloud upload is not implemented.

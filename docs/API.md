@@ -109,3 +109,25 @@ Read [the Arabic lot and expiry policy](EXPIRY_LOTS_AR.md) before use. Existing 
 ## Lot quarantine (schema v4)
 
 `POST /api/v1/lots/quarantine` requires `branch_id`, `warehouse_id`, `batch_id`, `quarantined` (boolean), and nonempty `reason`. Stock managers may **quarantine**, but only owner/manager may **release**. Changes are audited, idempotent, and added to the local sync outbox. Quarantined batches are excluded from FEFO sale/transfer but remain in physical inventory balances. This is **not a full recall or legal quarantine management system**.
+
+
+## Independent stocktake workflow (schema v5)
+
+Warehouse counting is separate from posting: the stock team opens a snapshot,
+records an actual quantity for every line, and submits it. A **different**
+owner/manager explicitly approves all movements and double-entry valuation.
+Any intervening warehouse inventory movement invalidates the snapshot.
+Only one open count is allowed per warehouse; cancelled and posted counts
+remain immutable records.
+
+| Route | Body / notes |
+|---|---|
+| `GET /api/v1/counts?branch_id=...` | Open/posted warehouse counts |
+| `GET /api/v1/counts/<id>` | Count lines; costs redacted for stock role |
+| `POST /api/v1/counts` | `branch_id`, `warehouse_id`, `reason` |
+| `POST /api/v1/counts/lines` | `count_id`, `line_id`, `counted_qty_milli`, optional `added_cost_minor` required for positive variance |
+| `POST /api/v1/counts/submit` | `count_id` (all count lines must be recorded) |
+| `POST /api/v1/counts/approve` | `count_id` (owner/manager other than creator) |
+| `POST /api/v1/counts/cancel` | `count_id`, `reason` (owner/manager) |
+
+More detail: [Arabic stocktake guide](STOCKTAKE_AR.md).

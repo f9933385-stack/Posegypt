@@ -123,3 +123,11 @@ For a dated verification summary, read [`docs/VERIFICATION_2026-11-12.md`](docs/
 - Database schema migrations are additive, with a future-version guard; old records are not silently removed.
 
 **Never deploy this development build to a live supermarket without completing the remaining release gates.**
+
+
+### Audited cycle counts (development schema v5)
+
+The Arabic **الجرد المعتمد** module captures warehouse inventory without
+posting financial movements until an independent owner/manager approves.
+Intervening sales or other warehouse stock movements invalidate the count,
+requiring a new count. See [Arabic stocktake guide](docs/STOCKTAKE_AR.md).

@@ -49,3 +49,15 @@ The Android debug build needs an isolated test LAN setup with a reachable branch
 - Authorized warehouse stock staff can block a lot from FEFO sale/transfer, with a required reason and audit event.
 - Only owner/manager can release the lot; physical stock balances remain unchanged.
 - Full recall workflow, disposal certificates, supplier notifications, temperature logs and separate sellable/unsellable warehouses remain unfinished.
+
+
+## Independent warehouse stocktake milestone (schema v5)
+- Draft count from a branch warehouse snapshot (up to 2000 lines), live sales still run.
+- Counted quantity including zero for every line, plus exact positive-cost variance.
+- Independent owner/manager approval; atomic stock adjustment, WAC journal and lot movement.
+- Reject approvals after intervening inventory movement; cancel/restart the count.
+- SQLite migration is forward-only; completed counts retain an auditable record.
+- **Not production certified:** multi-cashier field trial, blind second count,
+  device integration, approvals at configurable variance thresholds and cloud sync.
+
+[دليل الجرد بالعربية](STOCKTAKE_AR.md)

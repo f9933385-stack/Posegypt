@@ -16,11 +16,11 @@ void main() {
 
   test('initial migration and reopen are idempotent', () {
     final first=DatabaseStore.open(path);
-    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 1);
+    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 2);
     expect(first.first("SELECT name FROM sqlite_master WHERE name='products'")?['name'], 'products');
     first.dispose();
     final second=DatabaseStore.open(path);
-    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 1);
+    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 2);
     second.dispose();
   });
 

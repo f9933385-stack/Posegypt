@@ -155,3 +155,25 @@ const schemaV1 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_journal_reference ON journal_entries(reference_type,reference_id)''',
   '''CREATE INDEX IF NOT EXISTS ix_outbox_pending ON sync_outbox(synced_at,created_at)''',
 ];
+
+
+/// Additive migration: unit prices remain exact on sales and return documents.
+/// Backfill of existing unit pricing is intentionally not inferred.
+const schemaV2 = <String>[
+  '''CREATE TABLE IF NOT EXISTS product_units (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL REFERENCES products(id),
+    unit_name TEXT NOT NULL,
+    factor_milli INTEGER NOT NULL CHECK(factor_milli>0),
+    sell_price_minor INTEGER NOT NULL CHECK(sell_price_minor>=0),
+    barcode TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    UNIQUE(product_id,unit_name)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_product_units_product ON product_units(product_id,active)''',
+  '''CREATE INDEX IF NOT EXISTS ix_product_units_barcode ON product_units(barcode)''',
+  '''ALTER TABLE document_lines ADD COLUMN gross_minor INTEGER''',
+  '''ALTER TABLE document_lines ADD COLUMN unit_id TEXT''',
+  '''ALTER TABLE document_lines ADD COLUMN unit_count INTEGER''',
+];

@@ -72,6 +72,8 @@ class KasherApi {
     router.get('/api/v1/users', (Request r)=>_json(engine.listUsers(_p(r))));
     router.get('/api/v1/branches', (Request r)=>_json(engine.listBranches(_p(r))));
     router.get('/api/v1/warehouses', (Request r)=>_json(engine.listWarehouses(_p(r),_branch(r))));
+    router.get('/api/v1/units', (Request r)=>_json(engine.listProductUnits(_p(r),
+      r.url.queryParameters['product_id'] ?? '')));
     router.get('/api/v1/products', (Request r)=>_json(engine.listProducts(_p(r),
       search:r.url.queryParameters['q'] ?? '')));
     router.get('/api/v1/customers', (Request r)=>_json(engine.listParties(_p(r),customers:true)));
@@ -84,7 +86,7 @@ class KasherApi {
     router.get('/api/v1/shifts', (Request r)=>_json(engine.listShifts(_p(r),_branch(r))));
     router.get('/api/v1/sync/outbox', (Request r)=>_json(engine.outbox(_p(r),_branch(r))));
     final commands={
-      'users':'create_user','products':'create_product','customers':'create_customer','suppliers':'create_supplier',
+      'users':'create_user','products':'create_product','units':'create_product_unit','customers':'create_customer','suppliers':'create_supplier',
       'branches':'create_branch','warehouses':'create_warehouse',
       'inventory/transfers':'transfer_warehouse','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
       'purchases/returns':'purchase_return','customers/receipts':'customer_receipt',

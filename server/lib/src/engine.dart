@@ -78,6 +78,32 @@ class PosEngine {
            input['track_expiry']==true ? 1:0,now,now]);
         _audit(p,'product.create',productId,{'sku':sku});
         return {'id':productId,'sku':sku};
+      case 'create_product_unit':
+        _allow(p,['owner','manager','stock']);
+        final productId=nonEmpty(input['product_id'],'product_id');
+        _product(p,productId);
+        final name=nonEmpty(input['unit_name'],'unit_name');
+        final factor=strictInt(input['factor_milli'],'factor_milli',min:1);
+        final price=strictInt(input['sell_price_minor'],'sell_price_minor');
+        if(factor>1000000000 || price>1000000000) throw DomainError('Unit factor or price exceeds allowed bounds');
+        final barcode=input['barcode']==null || input['barcode']=='' ? null:
+          nonEmpty(input['barcode'],'barcode');
+        if(barcode!=null) {
+          if(store.first('SELECT id FROM products WHERE tenant_id=? AND barcode=?',[p.tenantId,barcode])!=null ||
+             store.first('''SELECT u.id FROM product_units u
+               JOIN products p ON p.id=u.product_id
+               WHERE p.tenant_id=? AND u.barcode=?''',[p.tenantId,barcode])!=null) {
+            throw DomainError('Barcode already assigned to this tenant',409);
+          }
+        }
+        final id=_id();
+        store.exec('''INSERT INTO product_units
+          (id,product_id,unit_name,factor_milli,sell_price_minor,barcode,created_at)
+          VALUES(?,?,?,?,?,?,?)''',[id,productId,name,factor,price,barcode,_now()]);
+        _audit(p,'product_unit.create',id,{'product_id':productId,'unit_name':name});
+        if(p.branchId!=null) _outbox(p.branchId!,'product_unit',{'id':id,'product_id':productId});
+        return {'id':id,'product_id':productId,'unit_name':name,'factor_milli':factor,
+          'sell_price_minor':price,'barcode':barcode};
       case 'create_customer':
         _allow(p,['owner','manager','cashier']);
         final id=_id();
@@ -160,6 +186,15 @@ class PosEngine {
     if(product==null) throw DomainError('Product not found or inactive',404);
     return product;
   }
+  Map<String,Object?> _productUnit(Principal p,String productId,String unitId) {
+    final unit=store.first('''SELECT u.* FROM product_units u
+      JOIN products pr ON pr.id=u.product_id
+      WHERE u.id=? AND u.product_id=? AND u.active=1 AND pr.tenant_id=? AND pr.active=1''',
+      [unitId,productId,p.tenantId]);
+    if(unit==null) throw DomainError('Unknown or forbidden product unit',404);
+    return unit;
+  }
+
   Map<String,Object?> _party(String table,Principal p,String id) {
     if(table!='customers' && table!='suppliers') throw StateError('Invalid table');
     final record=store.first('SELECT * FROM $table WHERE id=? AND tenant_id=?',[id,p.tenantId]);
@@ -204,10 +239,13 @@ class PosEngine {
        jsonEncode(snapshot),p.id,_now()]);
     return id;
   }
-  String _line(String doc,String product,int qty,int price,int disc,int tax,int cost,{String? originalLine}) {
+  String _line(String doc,String product,int qty,int price,int disc,int tax,int cost,
+      {String? originalLine,int? grossMinor,String? unitId,int? unitCount}) {
     final id=_id();
-    store.exec('''INSERT INTO document_lines(id,document_id,product_id,qty_milli,unit_price_minor,discount_minor,tax_minor,cost_minor,original_line_id)
-      VALUES(?,?,?,?,?,?,?,?,?)''',[id,doc,product,qty,price,disc,tax,cost,originalLine]);
+    store.exec('''INSERT INTO document_lines(id,document_id,product_id,qty_milli,
+      unit_price_minor,discount_minor,tax_minor,cost_minor,original_line_id,
+      gross_minor,unit_id,unit_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+      [id,doc,product,qty,price,disc,tax,cost,originalLine,grossMinor,unitId,unitCount]);
     return id;
   }
   /// Positive movement adds exact landed cost; negative movement removes WAC cost.
@@ -316,14 +354,37 @@ class PosEngine {
     for(final x in _inputLines(input)) {
       final product=nonEmpty(x['product_id'],'product_id');
       final data=_product(p,product);
-      final qty=strictInt(x['qty_milli'],'qty_milli',min:1);
-      final price=strictInt(x['unit_price_minor'] ?? data['sell_price_minor'],'unit_price_minor');
-      if(price!=(data['sell_price_minor'] as int) && p.role=='cashier') throw DomainError('Price override requires supervisor',403);
-      final gross=lineAmount(price,qty), disc=strictInt(x['discount_minor'] ?? 0,'discount_minor');
+      final unitId=x['unit_id'];
+      late final int qty,price,gross;
+      int? unitCount;
+      if(unitId!=null) {
+        if(x.containsKey('qty_milli')) throw DomainError('Use either unit_count or qty_milli');
+        final unit=_productUnit(p,product,nonEmpty(unitId,'unit_id'));
+        unitCount=strictInt(x['unit_count'] ?? 1,'unit_count',min:1);
+        if(unitCount>100000) throw DomainError('Unit count exceeds maximum');
+        qty=unitCount*(unit['factor_milli'] as int);
+        price=strictInt(x['unit_price_minor'] ?? unit['sell_price_minor'],'unit_price_minor');
+        if(price>1000000000) throw DomainError('Price exceeds maximum');
+        if(price!=(unit['sell_price_minor'] as int) && p.role=='cashier') {
+          throw DomainError('Unit price override requires supervisor',403);
+        }
+        gross=price*unitCount;
+      } else {
+        if(x.containsKey('unit_count')) throw DomainError('unit_count requires unit_id');
+        qty=strictInt(x['qty_milli'],'qty_milli',min:1);
+        price=strictInt(x['unit_price_minor'] ?? data['sell_price_minor'],'unit_price_minor');
+        if(price!=(data['sell_price_minor'] as int) && p.role=='cashier') {
+          throw DomainError('Price override requires supervisor',403);
+        }
+        gross=lineAmount(price,qty);
+      }
+      final disc=strictInt(x['discount_minor'] ?? 0,'discount_minor');
       if(disc>gross) throw DomainError('Discount exceeds sale line');
       if(disc>0 && p.role=='cashier') throw DomainError('Discount requires supervisor',403);
       final vat=taxAmount(gross-disc,data['tax_rate_bp'] as int);
-      items.add({'product_id':product,'qty':qty,'price':price,'discount':disc,'tax':vat,'net':gross-disc,'name':data['name_ar']});
+      items.add({'product_id':product,'qty':qty,'price':price,'gross':gross,
+        'unit_id':unitId,'unit_count':unitCount,
+        'discount':disc,'tax':vat,'net':gross-disc,'name':data['name_ar']});
       subtotal+=gross; discount+=disc; tax+=vat;
     }
     final total=subtotal-discount+tax, payments=_payments(input);
@@ -342,7 +403,9 @@ class PosEngine {
       final cost=_stock(p,branch,warehouse,line['product_id'] as String,-(line['qty'] as int),0,'sale',doc);
       cogs+=cost;
       _line(doc,line['product_id'] as String,line['qty'] as int,line['price'] as int,
-        line['discount'] as int,line['tax'] as int,cost);
+        line['discount'] as int,line['tax'] as int,cost,
+        grossMinor:line['gross'] as int,unitId:line['unit_id'] as String?,
+        unitCount:line['unit_count'] as int?);
     }
     store.exec('UPDATE documents SET cost_minor=? WHERE id=?',[cogs,doc]);
     _savePayments(doc,branch,customer,'in',payments);
@@ -554,7 +617,8 @@ class PosEngine {
       if(qty>(originalLine['remaining'] as int)) throw DomainError('Returned quantity exceeds sold quantity',409);
       final origQty=originalLine['qty_milli'] as int;
       final previouslyReturned=origQty-(originalLine['remaining'] as int);
-      final origGross=lineAmount(originalLine['unit_price_minor'] as int,origQty);
+      final origGross=(originalLine['gross_minor'] as int?) ??
+        lineAmount(originalLine['unit_price_minor'] as int,origQty);
       final originalNet=origGross-(originalLine['discount_minor'] as int);
       final lineNet=prorate(originalNet,previouslyReturned+qty,origQty)-
         prorate(originalNet,previouslyReturned,origQty);
@@ -666,6 +730,12 @@ class PosEngine {
     _allow(p,['owner']);
     return store.rows('SELECT id,username,role,branch_id,active,created_at FROM users WHERE tenant_id=? ORDER BY username',
       [p.tenantId]);
+  }
+
+  List<Map<String,Object?>> listProductUnits(Principal p,String productId) {
+    _product(p,productId);
+    return store.rows('''SELECT id,product_id,unit_name,factor_milli,sell_price_minor,barcode
+      FROM product_units WHERE product_id=? AND active=1 ORDER BY factor_milli''',[productId]);
   }
 
   List<Map<String,Object?>> listProducts(Principal p,{String search='',int limit=100}) => store.rows('''

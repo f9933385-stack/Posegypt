@@ -110,7 +110,7 @@ void main() {
   test('wrong tenant promotion and invalid time formats fail closed',() {
     final p=item('PROMO-VALIDATE');
     expect(()=>offer(p['id'],price:200),throwsA(isA<DomainError>()));
-    expect(()=>offer(p['id'],price:0),throwsA(isA<DomainError>()));
+    expect(()=>offer(p['id'],price:0),throwsFormatException);
     expect(()=>offer(p['id'],price:110,from:'2025-02-30T00:00:00Z'),
       throwsA(isA<DomainError>()));
     expect(()=>offer(p['id'],price:110,from:'2025-01-01'),

@@ -90,6 +90,35 @@ def audit(db_file: str) -> dict:
                 SELECT SUM(m.qty_change_milli) FROM batch_movements m
                 WHERE m.batch_id=b.id),0)
             """)
+        has_stock_counts = con.execute("""
+          SELECT 1 FROM sqlite_master WHERE type='table' AND name='stock_counts'
+        """).fetchone() is not None
+        if has_stock_counts:
+            check("posted_stock_count_approval", """
+              SELECT c.id,c.created_by,c.approved_by
+              FROM stock_counts c
+              WHERE c.status='posted' AND
+                (c.approved_by IS NULL OR c.approved_at IS NULL
+                 OR c.created_by=c.approved_by)
+            """)
+            check("posted_stock_count_missing_counts", """
+              SELECT c.id,l.id AS line_id FROM stock_counts c
+              JOIN stock_count_lines l ON l.count_id=c.id
+              WHERE c.status='posted' AND l.counted_qty_milli IS NULL
+            """)
+            check("stock_count_variance_movement", """
+              SELECT c.id,l.product_id,
+                SUM(l.counted_qty_milli-l.expected_qty_milli) AS intended_delta,
+                COALESCE((SELECT SUM(m.qty_change_milli)
+                  FROM inventory_movements m
+                  WHERE m.reference_type='stock_count'
+                    AND m.reference_id=c.id AND m.product_id=l.product_id),0)
+                  AS applied_delta
+              FROM stock_counts c JOIN stock_count_lines l ON l.count_id=c.id
+              WHERE c.status='posted'
+              GROUP BY c.id,l.product_id
+              HAVING intended_delta<>applied_delta
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

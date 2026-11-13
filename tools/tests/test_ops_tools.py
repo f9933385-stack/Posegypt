@@ -128,6 +128,45 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         self.assertIn('tracked_lot_movement_balance', output['errors'])
         self.assertIn('tracked_product_lot_quantity', output['errors'])
 
+    def test_stock_count_requires_independent_approval(self):
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO stock_counts(id,branch_id,warehouse_id,status,
+            reason,created_by,approved_by,created_at,approved_at)
+          VALUES('COUNT','B','W','posted','count','U','U','now','now')
+        """)
+        con.execute("""
+          INSERT INTO stock_count_lines(id,count_id,product_id,expected_qty_milli,
+            expected_cost_minor,counted_qty_milli)
+          VALUES('LINE','COUNT','P',1000,100,1000)
+        """)
+        con.commit()
+        con.close()
+        result=audit(str(self.db))
+        self.assertIn('posted_stock_count_approval',result['errors'])
+
+    def test_stock_count_posted_variance_must_equal_movement(self):
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,
+            role,created_at)
+          VALUES('MGR','T','B','manager','s','h','manager','now')
+        """)
+        con.execute("""
+          INSERT INTO stock_counts(id,branch_id,warehouse_id,status,reason,
+            created_by,approved_by,created_at,approved_at)
+          VALUES('COUNT','B','W','posted','count','U','MGR','now','now')
+        """)
+        con.execute("""
+          INSERT INTO stock_count_lines(id,count_id,product_id,expected_qty_milli,
+            expected_cost_minor,counted_qty_milli)
+          VALUES('LINE','COUNT','P',1000,100,1500)
+        """)
+        con.commit()
+        con.close()
+        result=audit(str(self.db))
+        self.assertIn('stock_count_variance_movement',result['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

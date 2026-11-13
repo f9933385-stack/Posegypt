@@ -281,3 +281,27 @@ const schemaV6 = <String>[
     ON device_pairing_tickets(tenant_id,expires_at)''',
   '''ALTER TABLE sessions ADD COLUMN device_id TEXT REFERENCES registered_devices(id)'''
 ];
+
+
+/// V7: individually approved promotional price windows. Base and unit prices
+/// have independent scopes; the cashier never creates or overrides them.
+const schemaV7 = <String>[
+  '''CREATE TABLE IF NOT EXISTS price_promotions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    product_id TEXT NOT NULL REFERENCES products(id),
+    unit_id TEXT REFERENCES product_units(id),
+    title TEXT NOT NULL,
+    promo_price_minor INTEGER NOT NULL CHECK(promo_price_minor>0),
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    stopped_by TEXT REFERENCES users(id),
+    stopped_at TEXT,
+    CHECK(starts_at<ends_at)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_promotions_lookup
+    ON price_promotions(tenant_id,product_id,unit_id,active,starts_at,ends_at)'''
+];

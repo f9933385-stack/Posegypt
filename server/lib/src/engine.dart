@@ -138,6 +138,7 @@ class PosEngine {
           VALUES(?,?,?,?,?,?,?,?)''',[id,p.tenantId,branch,username,salt,pbkdf2(password,salt),role,_now()]);
         _audit(p,'user.create',id,{'username':username,'role':role,'branch_id':branch},branch);
         return {'id':id,'username':username,'role':role};
+      case 'set_lot_quarantine': return _setLotQuarantine(p,input);
       case 'create_warehouse':
         _allow(p,['owner','manager']);
         final branch=_branch(p,input['branch_id']);
@@ -265,7 +266,7 @@ class PosEngine {
     if(qty<=0) throw DomainError('Lot consumption requires positive quantity');
     final lots=store.rows('''SELECT id,lot_no,expires_on,qty_milli FROM batches
       WHERE warehouse_id=? AND product_id=? AND qty_milli>0
-      AND expires_on>=? ORDER BY expires_on,lot_no,id''',
+      AND expires_on>=? AND quarantined=0 ORDER BY expires_on,lot_no,id''',
       [warehouse,product,_todayUtc()]);
     var outstanding=qty;
     final selected=<Map<String,Object?>>[];
@@ -328,13 +329,46 @@ class PosEngine {
     }
   }
 
+
+  Map<String,Object?> _setLotQuarantine(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','stock']);
+    final branch=_branch(p,input['branch_id']);
+    final warehouse=_warehouse(branch,input['warehouse_id']);
+    final batchId=nonEmpty(input['batch_id'],'batch_id');
+    final requested=input['quarantined'];
+    if(requested is! bool) throw DomainError('quarantined must be a boolean');
+    if(!requested && p.role=='stock') {
+      throw DomainError('Only a manager or owner may release a quarantined lot',403);
+    }
+    final reason=nonEmpty(input['reason'],'reason');
+    final row=store.first('''SELECT b.*,p.tenant_id FROM batches b
+      JOIN products p ON p.id=b.product_id WHERE b.id=?''',[batchId]);
+    if(row==null || row['tenant_id']!=p.tenantId) {
+      throw DomainError('Lot not found or not permitted',404);
+    }
+    final product=row['product_id'] as String;
+    _lot(warehouse,product,batchId);
+    if((row['quarantined'] as int)==(requested?1:0)) {
+      throw DomainError('Lot quarantine state is already set',409);
+    }
+    store.exec('''UPDATE batches SET quarantined=?,quarantine_reason=?,
+      quarantine_updated_at=? WHERE id=?''',
+      [requested?1:0,reason,_now(),batchId]);
+    _audit(p,requested?'lot.quarantined':'lot.released',batchId,
+      {'product_id':product,'warehouse_id':warehouse,'reason':reason},branch);
+    _outbox(branch,'lot_quarantine',{'batch_id':batchId,'product_id':product,
+      'warehouse_id':warehouse,'quarantined':requested,'reason':reason});
+    return {'batch_id':batchId,'quarantined':requested,'reason':reason};
+  }
+
   List<Map<String,Object?>> listLots(Principal p,String branchId,
       {String? warehouseId,String? productId}) {
     final branch=_branch(p,branchId);
     if(warehouseId!=null) _warehouse(branch,warehouseId);
     if(productId!=null) _product(p,productId);
     final list=store.rows('''SELECT b.id,b.product_id,b.warehouse_id,b.lot_no,
-      b.expires_on,b.qty_milli,p.name_ar,p.sku
+      b.expires_on,b.qty_milli,b.quarantined,b.quarantine_reason,
+      b.quarantine_updated_at,p.name_ar,p.sku
       FROM batches b JOIN warehouses w ON w.id=b.warehouse_id
       JOIN products p ON p.id=b.product_id
       WHERE w.branch_id=? AND p.tenant_id=?
@@ -343,8 +377,11 @@ class PosEngine {
       ORDER BY b.expires_on,b.lot_no LIMIT 500''',
       [branch,p.tenantId,warehouseId,warehouseId,productId,productId]);
     final today=_todayUtc();
-    return list.map((x)=>{...x,'expired': x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0,
-      'sellable_qty_milli': x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0
+    return list.map((x)=>{...x,
+      'expired': x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0,
+      'quarantined':x['quarantined']==1,
+      'sellable_qty_milli':(x['quarantined']==1 ||
+        (x['expires_on']!=null && (x['expires_on'] as String).compareTo(today)<0))
          ?0:x['qty_milli']}).toList();
   }
 

@@ -12,7 +12,7 @@ All unchecked items block a commercial production claim.
 - [ ] TLS, pair/revoke devices, login rate limit, RBAC scope and security assessment complete.
 - [ ] Central branch sync, multi-branch stock transfer with in-transit workflow and replay tests complete.
 - [ ] Verified encrypted local + separately provisioned offsite backup with monitored scheduling, vault-managed key, and independently documented cross-machine restore drill complete.
-- [ ] Device license signature + expiry read-only API enforcement and time rollback tests complete.
+- [ ] Ed25519 annual license verifier, expiry and clock tests pass **and** production-signed device licensing, key rollover, provisioning/revocation and paid renewals are field-validated.
 - [ ] Printer, barcode labels and scale integrations verified on selected hardware models.
 - [ ] Egyptian legal/tax compliance reviewed against current official requirements.
 - [ ] All 34 `docs/MASTER_SPEC.md` acceptance cases executed with evidence.

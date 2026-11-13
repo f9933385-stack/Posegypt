@@ -104,3 +104,11 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Lock prevents concurrent mirror writes, SHA-256 catches transfer corruption, and retention runs only after verified offsite copy. Optional `--offsite-directory` integrates this before local retention in `scheduled_backup.py`.
 - Added regression tests for remote corruption/failure, wrong password, lock ownership, restoration, retention and safe backup failure behavior.
 - **Not done:** provisioned offsite hardware/ACLs, automatic vault-backed scheduling and alerts, actual cross-machine recovery drill, cloud OAuth, ransomware-immutable remote storage. See [Arabic instructions](BACKUP_OFFSITE_AR.md).
+
+
+## Signed annual per-device license milestone (schema v9)
+- Offline vendor-only Python Ed25519 issuer creates a signed identity- and expiry-bound token, but never publishes the signing key; Dart verifies against an operator-provisioned public key list.
+- Authenticated owner/manager activates or renews **the current enrolled device only**; expiry/invalid grants, revoked devices and detected server-clock rollback put normal POST commands into read-only mode while GET remains accessible.
+- Remote LAN mode enforces grants by default, and localhost can enable explicit `--license-enforced`; the developer launcher is not a licensed commercial build.
+- Tests cover Python/Dart signature compatibility, fraudulent claims, one-year duration, expiry and session-bound activation.
+- **Remaining:** commercial billing/payment, provisioning at scale, hardened local deployment, protected license-key storage, signed production installers and live-store acceptance tests. See [license guide](LICENSES_AR.md).

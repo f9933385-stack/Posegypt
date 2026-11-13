@@ -157,3 +157,8 @@ The Arabic inter-branch shipments screen supports a two-phase dispatch and indep
 ### Verified secondary encrypted backup storage
 
 One-shot `tools/scheduled_backup.py` can optionally run `--offsite-directory <protected-share> --scratch <trusted-local-directory>` before deleting any old local copies. The offsite copy is promoted only after an independent authenticated restore and accounting audit on the trusted host. It does not set up Google Drive OAuth, secure scheduling, physical offsite storage or a tested disaster-recovery plan. See [Arabic offsite backup guide](docs/BACKUP_OFFSITE_AR.md).
+
+
+### Signed annual device licenses (development schema v9)
+
+An offline Python issuer signs Ed25519 device-specific annual licenses. The branch service holds public verifier keys only; LAN sessions must activate a valid device grant before ordinary POS writes. A single-PC localhost operator can opt in with `--license-enforced`. The Windows start script remains development-only. [Arabic license issuance and renewal guide](docs/LICENSES_AR.md). Commercial billing, hardware anti-copy, issuer HSM controls and offline rollback resistance remain release blockers.

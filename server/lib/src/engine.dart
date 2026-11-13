@@ -649,6 +649,7 @@ class PosEngine {
         lotNo=nonEmpty(input['lot_no'],'lot_no');
         expiresOn=_validExpiry(input['expires_on'],receiving:true);
       } else {
+        if(input['batch_id']==null) throw DomainError('Tracked negative adjustment requires batch_id');
         batchId=nonEmpty(input['batch_id'],'batch_id');
         _lot(warehouse,product,batchId);
       }

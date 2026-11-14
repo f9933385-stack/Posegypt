@@ -154,6 +154,8 @@ class KasherApi {
     router.get('/api/v1/stock', (Request r)=>_json(engine.listStock(_p(r),_branch(r))));
     router.get('/api/v1/documents', (Request r)=>_json(engine.listDocuments(_p(r),_branch(r))));
     router.get('/api/v1/documents/<id>', (Request r,String id)=>_json(engine.readDocument(_p(r),id)));
+    router.get('/api/v1/receipts/<id>', (Request r,String id)=>
+      _json(engine.saleReceipt(_p(r),id)));
     router.get('/api/v1/dashboard', (Request r)=>_json(engine.dashboard(_p(r),_branch(r))));
     router.get('/api/v1/audit', (Request r)=>_json(engine.audit(_p(r),_branch(r))));
     router.get('/api/v1/shifts', (Request r)=>_json(engine.listShifts(_p(r),_branch(r))));

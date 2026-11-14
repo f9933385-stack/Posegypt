@@ -57,3 +57,13 @@ The new tools do not change the status of any remaining production gate.
 - Added branch-wide cash shift commands (`shift_open` / `shift_close`), REST endpoints and
   a Flutter shift page with blind close. This assumes one shared branch till;
   separate physical cash drawers and formal variance approval remain unfinished.
+
+
+## Security follow-up (2026-11-15)
+
+Schema v10 and SQLite-backed per-identity staff-login throttling replace the
+prior process-memory throttle. The lockout survives API process restarts and is
+covered by expiry, identity-isolation, and restart tests. Cross-host/IP
+rate limiting, monitoring, and penetration testing are **not** implemented.
+This addendum supersedes the earlier login-throttling sentence in the
+initial 2026-11-12 snapshot above; it does not revise the remaining statuses.

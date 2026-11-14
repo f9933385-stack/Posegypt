@@ -42,6 +42,38 @@ void main() {
     expect(imbalance,isEmpty);
   });
 
+  test('dashboard excludes output VAT from profit and reverses it after a return', () {
+    final product=call('create_product',{
+      'sku':'VAT-PROFIT-TEST','name_ar':'منتج ضريبة',
+      'sell_price_minor':1000,'tax_rate_bp':1000});
+    final supplier=call('create_supplier',{'name':'مورد الضريبة'});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':2000,'unit_cost_minor':500}],
+      'payments':<Map<String,dynamic>>[]});
+    final sale=call('sale',{'branch_id':branch,
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':[{'method':'cash','amount_minor':1100}]});
+    expect(sale['total_minor'],1100);
+    final dash=engine.dashboard(owner,branch);
+    expect(dash['sales_minor'],1100); // Tax-inclusive invoice total.
+    expect(dash['sales_tax_minor'],100);
+    expect(dash['sales_excluding_tax_minor'],1000);
+    expect(dash['cost_of_goods_minor'],500);
+    expect(dash['gross_profit_minor'],500);
+    expect(dash['estimated_operating_profit_minor'],500);
+    final line=store.first('SELECT id FROM document_lines WHERE document_id=?',
+      [sale['id']])!;
+    call('sale_return',{'branch_id':branch,'original_id':sale['id'],
+      'refund_method':'cash',
+      'lines':[{'original_line_id':line['id'],'qty_milli':1000}]});
+    final afterReturn=engine.dashboard(owner,branch);
+    expect(afterReturn['sales_minor'],0);
+    expect(afterReturn['sales_tax_minor'],0);
+    expect(afterReturn['sales_excluding_tax_minor'],0);
+    expect(afterReturn['cost_of_goods_minor'],0);
+    expect(afterReturn['gross_profit_minor'],0);
+  });
+
   test('replaying same idempotency key does not duplicate stock', () {
     final p=call('create_product',{'sku':'B1','name_ar':'سكر','sell_price_minor':200});
     final s=call('create_supplier',{'name':'شركة'});

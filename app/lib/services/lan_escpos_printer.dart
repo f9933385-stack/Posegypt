@@ -85,6 +85,18 @@ class LanEscPosPrinter {
     return out.takeBytes();
   }
 
+  /// Separated for integration tests using a local ephemeral TCP listener.
+  static Future<void> writeToSocket(Socket socket,Uint8List bytes,{
+    Duration writeTimeout=const Duration(seconds:12),
+  }) async {
+    if(bytes.isEmpty || bytes.length>1024*1024) {
+      throw const FormatException('حجم أمر الطباعة يتجاوز الحد الآمن');
+    }
+    socket.add(bytes);
+    await socket.flush().timeout(writeTimeout);
+    await socket.close().timeout(const Duration(seconds:3));
+  }
+
   /// TCP flush confirms OS socket acceptance, NOT that paper printed.
   /// Never auto-retry ambiguous errors: operator checks paper before reprint.
   static Future<void> send({
@@ -101,9 +113,7 @@ class LanEscPosPrinter {
     try {
       socket=await Socket.connect(InternetAddress(ipv4),port,
         timeout:connectTimeout);
-      socket.add(rasterBytes);
-      await socket.flush().timeout(writeTimeout);
-      await socket.close().timeout(const Duration(seconds:3));
+      await writeToSocket(socket,rasterBytes,writeTimeout:writeTimeout);
     } on TimeoutException {
       throw const SocketException('انتهت مهلة إرسال الإيصال إلى الطابعة');
     } finally {

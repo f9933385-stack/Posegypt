@@ -367,3 +367,16 @@ const schemaV9 = <String>[
     max_seen_at TEXT NOT NULL
   )'''
 ];
+
+
+/// V10: durable, privacy-preserving per-account failed-login throttle.
+/// Stores only a hashed tenant/username identity, never entered passwords.
+const schemaV10 = <String>[
+  '''CREATE TABLE IF NOT EXISTS login_attempt_limits (
+    identity_hash TEXT PRIMARY KEY,
+    failure_count INTEGER NOT NULL CHECK(failure_count BETWEEN 1 AND 8),
+    window_started_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_login_attempt_limits_window
+    ON login_attempt_limits(window_started_at)'''
+];

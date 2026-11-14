@@ -14,17 +14,18 @@ class KasherApi {
   final bool enforceLicenses;
   final DeviceRegistry devices;
   final DeviceLicensing licensing;
+  final LoginAttemptLimiter loginAttempts;
   KasherApi(this.engine,this.auth,{
     this.enforceDevices=false,
     this.enforceLicenses=false,
     Map<String,List<int>> licenseTrustKeys=const {},
   }) : devices=DeviceRegistry(auth.store),
-       licensing=DeviceLicensing(auth.store,trustKeys:licenseTrustKeys) {
+       licensing=DeviceLicensing(auth.store,trustKeys:licenseTrustKeys),
+       loginAttempts=LoginAttemptLimiter(auth.store) {
     if(enforceLicenses && licenseTrustKeys.isEmpty) {
       throw StateError('License enforcement requires a trusted Ed25519 public key');
     }
   }
-  final Map<String,List<DateTime>> _loginFailures={};
 
   Response _json(Object? value,{int status=200}) => Response(status,body:jsonEncode(value),
     headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',
@@ -64,20 +65,20 @@ class KasherApi {
       final body=await _body(r);
       final tenant=body['tenant_id'],username=body['username'],password=body['password'];
       if(tenant is! String || username is! String || password is! String) throw DomainError('Missing credentials',400);
-      // In-process per-identity throttling. Still require TLS and durable auth controls for production.
-      final attemptKey=tenant.trim()+':'+username.trim();
-      final now=DateTime.now().toUtc();
-      final recent=_loginFailures.putIfAbsent(attemptKey,()=> <DateTime>[]);
-      recent.removeWhere((x)=>x.isBefore(now.subtract(const Duration(minutes:5))));
-      if(recent.length>=8) throw DomainError('Too many login attempts. Try later.',429);
+      if(loginAttempts.isBlocked(tenant,username)) {
+        throw DomainError('Too many login attempts. Try later.',429);
+      }
       final deviceId=body['device_id'],deviceSecret=body['device_secret'];
       if(deviceId!=null && deviceId is! String) throw DomainError('Invalid device credentials',400);
       if(deviceSecret!=null && deviceSecret is! String) throw DomainError('Invalid device credentials',400);
       final result=auth.login(tenant,username,password,
         deviceId:deviceId as String?,deviceSecret:deviceSecret as String?,
         requireDevice:enforceDevices);
-      if(result==null) {recent.add(now);throw DomainError('Invalid credentials',401);}
-      _loginFailures.remove(attemptKey);
+      if(result==null) {
+        loginAttempts.registerFailure(tenant,username);
+        throw DomainError('Invalid credentials',401);
+      }
+      loginAttempts.clear(tenant,username);
       return _json(result);
     });
     router.post('/api/v1/auth/logout', (Request r) {

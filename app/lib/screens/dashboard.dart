@@ -21,7 +21,8 @@ class _DashboardState extends State<DashboardPage> {
       LayoutBuilder(builder:(context,size){
         final columns=size.maxWidth>1000?4:size.maxWidth>560?2:1;
         final cards=[
-          ('صافي المبيعات','sales_minor',Icons.trending_up),
+          ('صافي المبيعات قبل الضريبة','sales_excluding_tax_minor',Icons.trending_up),
+          ('صافي ضريبة المبيعات','sales_tax_minor',Icons.receipt_long),
           ('مجمل الربح','gross_profit_minor',Icons.show_chart),
           ('المصروفات','expenses_minor',Icons.money_off),
           ('الربح التشغيلي التقديري','estimated_operating_profit_minor',Icons.savings_outlined),

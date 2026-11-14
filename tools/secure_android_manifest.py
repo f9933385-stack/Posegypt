@@ -19,6 +19,14 @@ def secure_manifest(path: Path) -> None:
         raise ValueError("AndroidManifest.xml lacks <application>")
     app.set(ANDROID + "allowBackup", "false")
     app.set(ANDROID + "usesCleartextTraffic", "false")
+    # HTTPS branch API and operator-chosen LAN raw-TCP printer require
+    # Android INTERNET permission in production (not debug-only manifests).
+    # Keep standard cleartext HTTP stacks blocked: raw ESC/POS sockets are
+    # separately constrained to RFC1918 IPv4 and TCP 9100 in Dart.
+    if not any(p.get(ANDROID + "name") == "android.permission.INTERNET"
+               for p in root.findall("uses-permission")):
+        root.insert(0, ET.Element("uses-permission",
+                       {ANDROID + "name": "android.permission.INTERNET"}))
     root.write(path, encoding="utf-8", xml_declaration=True)
     # Verify output is parseable and the exact protections are present.
     verified = ET.parse(path).getroot().find("application")

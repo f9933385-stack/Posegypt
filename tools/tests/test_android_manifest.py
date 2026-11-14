@@ -23,6 +23,9 @@ class AndroidManifestTest(unittest.TestCase):
             self.assertEqual(app.get(ANDROID+"allowBackup"),"false")
             self.assertEqual(app.get(ANDROID+"usesCleartextTraffic"),"false")
             self.assertEqual(len(list(app.findall("activity"))),1)
+            permissions=ET.parse(path).getroot().findall("uses-permission")
+            self.assertEqual(sum(p.get(ANDROID+"name") == "android.permission.INTERNET"
+                                 for p in permissions),1)
 
     def test_missing_application_fails_closed(self):
         with tempfile.TemporaryDirectory() as t:

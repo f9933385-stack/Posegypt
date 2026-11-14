@@ -120,3 +120,11 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Arabic-shaped Flutter widgets are rasterized into an 80mm PDF, passed to Windows/Android platform print dialog through the supported printing plugin.
 - Regression tests validate HTTP access, tax, cartons, payment reconciliation, corrupt server records and Arabic client rendering.
 - **Not certified hardware or tax:** no ESC/POS byte protocol, cut/cash drawer, selected printer driver verification, fiscal e-receipt issuance, test-store print results or long receipt pagination. See [Arabic printing guide](PRINTING_AR.md).
+
+
+## ESC/POS LAN raster printing (development)
+- Optional native TCP 9100 image printing on operator-specified RFC1918 IPv4 address, for GS v 0 compatible 58 mm (384 dots) or 80 mm (576 dots) printer heads. Arabic is rendered as a monochrome image, split into bounded raster chunks; cutter command is disabled by default.
+- The app locally remembers printer address and width (no access token). User must explicitly initiate each printing attempt; no automatic resend of an ambiguous write.
+- Android generated production manifest explicitly includes INTERNET permission while keeping cleartext HTTP traffic blocked; LAN raw socket is separately IP/port restricted.
+- Tests validate image raster bytes, bit order and width/chunk headers, corrupted input and a local ephemeral TCP dummy printer.
+- **Not field complete:** printer model compatibility/physical printing, modern Epson GS ( L support, USB/Bluetooth, driver and paper status, cutter/drawer warranty, fiscal integration, network VLAN/security assessment. See [Arabic guide](PRINTING_AR.md).

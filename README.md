@@ -167,3 +167,8 @@ An offline Python issuer signs Ed25519 device-specific annual licenses. The bran
 ### Arabic 80mm printed sales receipts
 
 Posted sales can now be previewed in Arabic and sent to the installed Windows/Android print driver as a rasterized 80mm PDF. A read-only authenticated receipt API reconciles actual posted amounts and payment methods before output, and reprints from Reports never create duplicate sales. This is **not direct ESC/POS or Egyptian fiscal e-receipt integration**; hardware model and field print tests remain necessary. [Arabic printing guide](docs/PRINTING_AR.md).
+
+
+### Optional direct thermal printer via LAN (testing milestone)
+
+The authenticated posted-sale receipt preview now has a manual **LAN ESC/POS** action for 384-dot/58mm or 576-dot/80mm `GS v 0` raster image printers on a **private IPv4 TCP 9100** address. Arabic glyphs are rendered by Flutter rather than printer text encoding, with optional manual cutter enabled only by the user. A fake TCP printer is covered by tests. This does **not** verify actual paper output or support every Epson model, USB/Bluetooth, cash drawer, printer status or fiscal/e-receipt compliance. See [Arabic printing guide](docs/PRINTING_AR.md).

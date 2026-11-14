@@ -1593,6 +1593,100 @@ class PosEngine {
     }
     return result;
   }
+
+  /// A read-only receipt projection of an IMMUTABLY posted sale.
+  /// Never trust or print prices submitted by the client: reconcile original
+  /// persisted line totals and payments before returning print data.
+  /// This is NOT an Egyptian ETA electronic fiscal receipt.
+  Map<String,Object?> saleReceipt(Principal actor,String documentId) {
+    final sale=store.first('''SELECT d.id,d.branch_id,d.kind,d.number,d.state,
+      d.subtotal_minor,d.discount_minor,d.tax_minor,d.total_minor,
+      d.paid_minor,d.created_at,b.name AS branch_name,
+      t.name AS store_name,u.username AS cashier_name
+      FROM documents d
+      JOIN branches b ON b.id=d.branch_id
+      JOIN tenants t ON t.id=d.tenant_id
+      JOIN users u ON u.id=d.created_by
+      WHERE d.id=? AND d.tenant_id=?''',[documentId,actor.tenantId]);
+    if(sale==null) throw DomainError('Receipt not found',404);
+    _branch(actor,sale['branch_id']);
+    if(sale['kind']!='sale') {
+      throw DomainError('Only posted sale receipts can be printed here',409);
+    }
+    if(sale['state']!='posted') {
+      throw DomainError('Receipt is not a posted sale',409);
+    }
+    final lines=store.rows('''SELECT l.id,l.product_id,p.sku,p.name_ar,
+      l.qty_milli,l.unit_price_minor,l.unit_count,l.unit_id,
+      COALESCE(u.unit_name,p.base_unit) AS unit_name,
+      l.gross_minor,l.discount_minor,l.tax_minor
+      FROM document_lines l JOIN products p ON p.id=l.product_id
+      LEFT JOIN product_units u ON u.id=l.unit_id
+      WHERE l.document_id=? ORDER BY l.rowid''',[documentId]);
+    if(lines.isEmpty || lines.length>250) {
+      throw DomainError('Sale has invalid receipt item count',409);
+    }
+    var subtotal=0,discount=0,tax=0;
+    final items=<Map<String,Object?>>[];
+    for(final line in lines) {
+      final gross=line['gross_minor'] as int?;
+      final qty=line['qty_milli'] as int;
+      final unitCount=line['unit_count'] as int?;
+      final unitPrice=line['unit_price_minor'] as int;
+      final reduction=line['discount_minor'] as int;
+      final vat=line['tax_minor'] as int;
+      if(gross==null || qty<=0 || gross<0 || reduction<0 ||
+         reduction>gross || vat<0 || unitPrice<0 ||
+         (unitCount!=null && unitCount<=0)) {
+        throw DomainError('Receipt line integrity check failed',409);
+      }
+      final amount=gross-reduction+vat;
+      subtotal+=gross;
+      discount+=reduction;
+      tax+=vat;
+      items.add({'sku':line['sku'],'name_ar':line['name_ar'],
+        'qty_milli':qty,'unit_price_minor':unitPrice,
+        'unit_count':unitCount,'unit_name':line['unit_name'],
+        'gross_minor':gross,'discount_minor':reduction,
+        'tax_minor':vat,'total_minor':amount});
+    }
+    final total=sale['total_minor'] as int;
+    final paid=sale['paid_minor'] as int;
+    if(subtotal!=sale['subtotal_minor'] ||
+       discount!=sale['discount_minor'] ||
+       tax!=sale['tax_minor'] ||
+       subtotal-discount+tax!=total ||
+       paid<0 || paid>total) {
+      throw DomainError('Sale receipt totals do not reconcile',409);
+    }
+    final payments=store.rows('''SELECT method,direction,amount_minor
+      FROM payments WHERE document_id=? ORDER BY rowid''',[documentId]);
+    var paidFromRows=0;
+    for(final row in payments) {
+      if(row['direction']!='in' || (row['amount_minor'] as int)<=0) {
+        throw DomainError('Receipt payment integrity check failed',409);
+      }
+      paidFromRows+=(row['amount_minor'] as int);
+    }
+    if(paidFromRows!=paid) {
+      throw DomainError('Receipt payments do not reconcile',409);
+    }
+    return {
+      'document_id':documentId,'number':sale['number'],
+      'store_name':sale['store_name'],'branch_name':sale['branch_name'],
+      'cashier_name':sale['cashier_name'],
+      'created_at':sale['created_at'],
+      'currency':'EGP','kind':'sale',
+      'subtotal_minor':subtotal,'discount_minor':discount,
+      'tax_minor':tax,'total_minor':total,'paid_minor':paid,
+      'due_minor':total-paid,
+      'lines':items,
+      'payments':payments.map((p)=>{'method':p['method'],
+        'amount_minor':p['amount_minor']}).toList(),
+      'notice_ar':'مستند بيع داخلي — ليس إيصالًا ضريبيًا إلكترونيًا معتمدًا'
+    };
+  }
+
   Map<String,Object?> readDocument(Principal p,String doc) {
     final d=store.first('SELECT * FROM documents WHERE id=? AND tenant_id=?',[doc,p.tenantId]);
     if(d==null) throw DomainError('Document not found',404);

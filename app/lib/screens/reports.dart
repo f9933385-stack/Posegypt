@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api.dart';
+import 'receipt_print.dart';
 import '../models/formats.dart';
 import '../widgets/common.dart';
 
@@ -31,6 +32,13 @@ class _ReportsState extends State<ReportsPage> {
         ]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إغلاق'))]));
     }catch(e){if(mounted)alert(context,'تعذر عرض المستند: $e',error:true);}
   }
+  Future<void> _printSale(Map<String,dynamic> document) async {
+    try {
+      await showSaleReceiptDialog(context,widget.api,document['id'] as String);
+    }catch(e){
+      if(mounted)alert(context,'تعذرت معاينة إيصال البيع: $e',error:true);
+    }
+  }
   @override Widget build(BuildContext context)=>Column(children:[
     SectionTitle('الفواتير والتقارير',subtitle:'مستندات معتمدة وغير قابلة للحذف من شاشة المستخدم.',
       action:IconButton(onPressed:_reload,icon:const Icon(Icons.refresh))),
@@ -39,7 +47,14 @@ class _ReportsState extends State<ReportsPage> {
         ListView.builder(itemCount:list.length,itemBuilder:(context,i){final d=list[i];return Card(child:ListTile(
           leading:Icon(d['kind']=='sale'?Icons.point_of_sale:Icons.receipt_outlined),
           title:Text(d['number'].toString()),subtitle:Text('${d['kind']} • ${d['created_at']}'),
-          trailing:Text(money(asInt(d['total_minor'])),style:const TextStyle(fontWeight:FontWeight.bold)),
+          trailing:Row(mainAxisSize:MainAxisSize.min,children:[
+            Text(money(asInt(d['total_minor'])),
+              style:const TextStyle(fontWeight:FontWeight.bold)),
+            if(d['kind']=='sale')IconButton(
+              icon:const Icon(Icons.print_outlined),
+              tooltip:'معاينة وطباعة إيصال البيع',
+              onPressed:()=>_printSale(d)),
+          ]),
           onTap:()=>_details(d)));}))),
   ]);
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api.dart';
+import 'receipt_print.dart';
 import '../models/formats.dart';
 import '../widgets/common.dart';
 
@@ -129,6 +130,13 @@ class _PosState extends State<PosPage> {
       if(!mounted)return;
       alert(context,'تم حفظ الفاتورة ${result['number']} — ${money(asInt(result['total_minor']))}');
       setState(() {cart.clear();for(final c in [cash,card,wallet,bank]){c.clear();} customerId=null;});
+      // Printing happens AFTER the sale is durably posted. A printer failure
+      // must never show the operator "sale failed" or re-post the transaction.
+      try {
+        await showSaleReceiptDialog(context,widget.api,result['id'] as String);
+      }catch(e){
+        if(mounted)alert(context,'تم حفظ الفاتورة ولكن تعذرت معاينة الإيصال: $e — يمكنك طباعته من التقارير',error:true);
+      }
     }catch(e){alert(context,'تعذر حفظ الفاتورة: $e',error:true);}
     finally{if(mounted)setState(()=>posting=false);}
   }

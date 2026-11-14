@@ -25,7 +25,7 @@ def secure_manifest(path: Path) -> None:
     # separately constrained to RFC1918 IPv4 and TCP 9100 in Dart.
     if not any(p.get(ANDROID + "name") == "android.permission.INTERNET"
                for p in root.findall("uses-permission")):
-        root.insert(0, ET.Element("uses-permission",
+        root.getroot().insert(0, ET.Element("uses-permission",
                        {ANDROID + "name": "android.permission.INTERNET"}))
     root.write(path, encoding="utf-8", xml_declaration=True)
     # Verify output is parseable and the exact protections are present.

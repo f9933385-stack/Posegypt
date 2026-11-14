@@ -4,6 +4,8 @@ import 'package:flutter/rendering.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/lan_escpos_printer.dart';
 
 import '../models/sale_receipt.dart';
 import '../services/api.dart';
@@ -136,6 +138,100 @@ class _SaleReceiptDialogState extends State<SaleReceiptDialog> {
     }
   }
 
+
+  Future<void> _printLan() async {
+    if(_printing)return;
+    try {
+      final prefs=await SharedPreferences.getInstance();
+      if(!mounted)return;
+      final address=TextEditingController(text:prefs.getString('escpos_host')??'');
+      var dots=prefs.getInt('escpos_dots')??576;
+      if(dots!=384 && dots!=576)dots=576;
+      var cut=prefs.getBool('escpos_cut')??false;
+      try {
+        final choice=await showDialog<({String host,int dots,bool cut})>(
+          context:context,builder:(ctx)=>StatefulBuilder(
+          builder:(ctx,change)=>AlertDialog(
+            title:const Text('الطابعة الحرارية على شبكة المتجر'),
+            content:SizedBox(width:470,child:Column(
+              mainAxisSize:MainAxisSize.min,children:[
+              const Text('الطابعة لازم تدعم ESC/POS GS v 0 وتكون على LAN معزولة. لا يتم التأكد من خروج الورقة تلقائيًا.'),
+              const SizedBox(height:12),
+              TextField(controller:address,keyboardType:TextInputType.url,
+                textDirection:TextDirection.ltr,
+                decoration:const InputDecoration(
+                  labelText:'IP الطابعة المحلية (TCP 9100)',
+                  hintText:'192.168.1.50')),
+              const SizedBox(height:12),
+              DropdownButtonFormField<int>(
+                value:dots,decoration:const InputDecoration(labelText:'عرض رأس الطباعة'),
+                items:const [
+                  DropdownMenuItem(value:576,child:Text('80 مم — 576 نقطة')),
+                  DropdownMenuItem(value:384,child:Text('58 مم — 384 نقطة')),
+                ],onChanged:(v){if(v!=null)change(()=>dots=v);}),
+              CheckboxListTile(
+                value:cut,dense:true,
+                title:const Text('إرسال أمر قطع الورق (فقط لطابعة تدعمه)'),
+                onChanged:(v)=>change(()=>cut=v??false)),
+            ])),
+            actions:[
+              TextButton(onPressed:()=>Navigator.pop(ctx),
+                child:const Text('إلغاء')),
+              FilledButton(onPressed:(){
+                try {
+                  final host=LanEscPosPrinter.validateHost(address.text);
+                  Navigator.pop(ctx,(host:host,dots:dots,cut:cut));
+                } on FormatException catch(e) {
+                  alert(ctx,e.message,error:true);
+                }
+              },child:const Text('إرسال للطابعة')),
+            ],
+          )));
+        if(choice==null || !mounted)return;
+        await prefs.setString('escpos_host',choice.host);
+        await prefs.setInt('escpos_dots',choice.dots);
+        await prefs.setBool('escpos_cut',choice.cut);
+        if(!mounted)return;
+        setState(()=>_printing=true);
+        try {
+          await WidgetsBinding.instance.endOfFrame;
+          final boundary=_paper.currentContext?.findRenderObject();
+          if(boundary is! RenderRepaintBoundary ||
+              boundary.size.width<=0 || boundary.size.height<=0) {
+            throw const FormatException('معاينة الإيصال غير جاهزة');
+          }
+          // Slight padding avoids an out-of-range width from pixel rounding.
+          final pixelRatio=(choice.dots-2)/boundary.size.width;
+          final image=await boundary.toImage(pixelRatio:pixelRatio);
+          try {
+            if(image.width>choice.dots ||
+               image.height>LanEscPosPrinter.maxImageHeight ||
+               image.height<=0) {
+              throw const FormatException('الإيصال أطول من قدرة الطابعة في مهمة واحدة');
+            }
+            final bytes=await image.toByteData(
+              format:ui.ImageByteFormat.rawRgba);
+            if(bytes==null)throw const FormatException('تعذر استخراج بيانات صورة الإيصال');
+            final raster=LanEscPosPrinter.encodeRaster(
+              bytes.buffer.asUint8List(bytes.offsetInBytes,bytes.lengthInBytes),
+              imageWidth:image.width,imageHeight:image.height,
+              paperDots:choice.dots,cut:choice.cut);
+            await LanEscPosPrinter.send(host:choice.host,rasterBytes:raster);
+          }finally{image.dispose();}
+          if(mounted) {
+            alert(context,'تم إرسال الإيصال للطابعة. تأكد من خروج الورقة؛ الاتصال وحده لا يؤكد الطباعة.');
+          }
+        }catch(e){
+          if(mounted)alert(context,'نتيجة الإرسال غير مؤكدة: $e. افحص الطابعة قبل إعادة الطباعة لتجنب نسختين.',error:true);
+        }finally{
+          if(mounted)setState(()=>_printing=false);
+        }
+      }finally{address.dispose();}
+    }catch(e){
+      if(mounted)alert(context,'إعداد الطابعة غير متاح: $e',error:true);
+    }
+  }
+
   @override Widget build(BuildContext context)=>AlertDialog(
     title:const Text('معاينة إيصال البيع — عرض 80 مم'),
     content:SizedBox(width:355,height:530,child:SingleChildScrollView(
@@ -144,6 +240,9 @@ class _SaleReceiptDialogState extends State<SaleReceiptDialog> {
     actions:[
       TextButton(onPressed:_printing?null:()=>Navigator.pop(context),
         child:const Text('إغلاق')),
+      OutlinedButton.icon(onPressed:_printing?null:_printLan,
+        icon:const Icon(Icons.receipt_long_outlined),
+        label:const Text('طباعة حرارية LAN')),
       FilledButton.icon(onPressed:_printing?null:_print,
         icon:const Icon(Icons.print_outlined),
         label:Text(_printing?'جارٍ فتح الطابعة...':'طباعة / حفظ PDF')),

@@ -1711,6 +1711,12 @@ class PosEngine {
       WHERE branch_id=? AND kind='sale_return' AND state='posted' ''',[branch]);
     final cogs=total('''SELECT COALESCE(SUM(CASE WHEN kind='sale' THEN cost_minor WHEN kind='sale_return' THEN -cost_minor ELSE 0 END),0) n
       FROM documents WHERE branch_id=? AND state='posted' ''',[branch]);
+    // Output VAT belongs to the tax authority, not to store revenue or profit.
+    // Preserve sales_minor (tax-inclusive) for API compatibility and expose
+    // tax-exclusive revenue separately to avoid overstating gross profit.
+    final outputVat=total('''SELECT COALESCE(SUM(CASE WHEN kind='sale' THEN tax_minor WHEN kind='sale_return' THEN -tax_minor ELSE 0 END),0) n
+      FROM documents WHERE branch_id=? AND state='posted' ''',[branch]);
+    final netRevenue=sales-returns-outputVat;
     final expenses=total('SELECT COALESCE(SUM(amount_minor),0) n FROM expenses WHERE branch_id=?',[branch]);
     final stock=total('SELECT COALESCE(SUM(cost_minor),0) n FROM stock_balances WHERE branch_id=?',[branch]);
     final cash=total('''SELECT COALESCE(SUM(l.debit_minor-l.credit_minor),0) n
@@ -1722,9 +1728,11 @@ class PosEngine {
     final supplierPayable=total('''SELECT COALESCE(SUM(l.credit_minor-l.debit_minor),0) n
       FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
       WHERE e.branch_id=? AND l.account LIKE 'AP:%' ''',[branch]);
-    return {'branch_id':branch,'sales_minor':sales-returns,'cost_of_goods_minor':cogs,
-      'gross_profit_minor':sales-returns-cogs,'expenses_minor':expenses,
-      'estimated_operating_profit_minor':sales-returns-cogs-expenses,
+    return {'branch_id':branch,'sales_minor':sales-returns,
+      'sales_excluding_tax_minor':netRevenue,'sales_tax_minor':outputVat,
+      'cost_of_goods_minor':cogs,
+      'gross_profit_minor':netRevenue-cogs,'expenses_minor':expenses,
+      'estimated_operating_profit_minor':netRevenue-cogs-expenses,
       'stock_value_minor':stock,'cash_minor':cash,'customer_receivables_minor':creditCustomers,
       'supplier_payables_minor':supplierPayable,
       'pending_sync':total('SELECT COUNT(*) n FROM sync_outbox WHERE branch_id=? AND synced_at IS NULL',[branch])};

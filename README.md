@@ -162,3 +162,8 @@ One-shot `tools/scheduled_backup.py` can optionally run `--offsite-directory <pr
 ### Signed annual device licenses (development schema v9)
 
 An offline Python issuer signs Ed25519 device-specific annual licenses. The branch service holds public verifier keys only; LAN sessions must activate a valid device grant before ordinary POS writes. A single-PC localhost operator can opt in with `--license-enforced`. The Windows start script remains development-only. [Arabic license issuance and renewal guide](docs/LICENSES_AR.md). Commercial billing, hardware anti-copy, issuer HSM controls and offline rollback resistance remain release blockers.
+
+
+### Arabic 80mm printed sales receipts
+
+Posted sales can now be previewed in Arabic and sent to the installed Windows/Android print driver as a rasterized 80mm PDF. A read-only authenticated receipt API reconciles actual posted amounts and payment methods before output, and reprints from Reports never create duplicate sales. This is **not direct ESC/POS or Egyptian fiscal e-receipt integration**; hardware model and field print tests remain necessary. [Arabic printing guide](docs/PRINTING_AR.md).

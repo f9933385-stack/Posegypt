@@ -112,3 +112,11 @@ The Windows launcher binds to localhost only. Android testing requires a reachab
 - Remote LAN mode enforces grants by default, and localhost can enable explicit `--license-enforced`; the developer launcher is not a licensed commercial build.
 - Tests cover Python/Dart signature compatibility, fraudulent claims, one-year duration, expiry and session-bound activation.
 - **Remaining:** commercial billing/payment, provisioning at scale, hardened local deployment, protected license-key storage, signed production installers and live-store acceptance tests. See [license guide](LICENSES_AR.md).
+
+
+## Arabic receipt printing milestone
+- Flutter displays a verified Arabic 80mm sale receipt automatically **after** persisting the sale and offers reprint from reports without duplicate transactions.
+- A new server-owned GET endpoint returns reconciled document lines, exact EGP totals and payment method splits; it never reveals COGS or user secrets.
+- Arabic-shaped Flutter widgets are rasterized into an 80mm PDF, passed to Windows/Android platform print dialog through the supported printing plugin.
+- Regression tests validate HTTP access, tax, cartons, payment reconciliation, corrupt server records and Arabic client rendering.
+- **Not certified hardware or tax:** no ESC/POS byte protocol, cut/cash drawer, selected printer driver verification, fiscal e-receipt issuance, test-store print results or long receipt pagination. See [Arabic printing guide](PRINTING_AR.md).

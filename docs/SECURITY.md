@@ -8,7 +8,7 @@ This is **not yet an internet-facing or production-ready financial service**.
 4. **Database:** SQLite foreign keys and WAL are enabled. Writes are synchronous `BEGIN IMMEDIATE` transactions; stock has no-negative-quantity constraint. Database file must remain private to Windows host, backed up safely; never mount to multiple clients over SMB. No encrypted-at-rest policy shipped.
 5. **Payment methods:** cash/card/wallet/bank are accounting labels, not integrations. No real payment card information, CVV, or banking credentials should be entered or stored.
 6. **Local files:** `data/`, `.env`, `.key`, `.pem`, `.db`, WAL/SHM are gitignored. Also restrict filesystem ACLs for the production host, logs, and backups.
-7. **Testing to add:** durable distributed rate limiting, penetration test, denied access tests, managed TLS trust and certificate rotation on store hardware, clock manipulation guard, digital signatures for licenses, key management, logging and monitoring. Basic login throttling and backup restore tests exist but do not replace field validation.
+7. **Testing to add:** distributed rate limiting across hosts/IPs, penetration test, denied access tests, managed TLS trust and certificate rotation on store hardware, clock manipulation guard, key management, logging and monitoring. A durable per-tenant/per-username SQLite lockout now survives service restarts, but it is not an edge/network-wide rate limit and does not prevent distributed password spraying. Backup restore tests do not replace field validation.
 8. **Legal:** do not claim Egyptian e-invoice/e-receipt compliance; tax fields are for internal calculations only pending current legal review.
 
 Android clients now require a trusted HTTPS branch endpoint on the LAN. Never disable certificate verification or Android network protection to work around trust errors. Loopback HTTP is restricted to the same device.
@@ -71,3 +71,21 @@ Ed25519 annual grants bind the `tenant_id` and enrolled `device_id` and are veri
 ## Restricted local printer TCP support
 
 The optional ESC/POS direct-print mode sends only an already-posted, non-fiscal sale receipt image to a user-confirmed **RFC1918 IPv4** address (or exact 127.0.0.1 for isolated integration testing) on fixed TCP port **9100**. It does **not** permit arbitrary public internet hosts, URL credentials, proxy hosts or ports. Printer settings contain no access token. Raw TCP 9100 is **unauthenticated and unencrypted**; operators must isolate printers on a trusted LAN/VLAN, allow-list their POS devices and never forward the port over the internet. The printer's acceptance of socket bytes is not proof of physical printing. Automatic retry on ambiguous TCP outcomes is deliberately forbidden, to avoid duplicate paper receipts. This is an optional development feature; it requires real model compatibility and network security tests before production.
+
+
+## Durable login attempt throttle (schema v10)
+
+Failed staff sign-in attempts are counted for each tenant/username fingerprint in
+SQLite, not an in-memory map. Eight failed attempts in a rolling five-minute
+window block even a correct password until the window expires. A successful
+login clears its fingerprint; restart of the local branch service does not
+reset the limit. Only a SHA-256 hash of the identity is saved, not the password
+or entered username. Entries older than one day are pruned on subsequent
+failed attempts. Clock correctness and file permissions remain operational
+requirements.
+
+**Important:** This is a local per-identity defense, not a distributed
+rate limiter by network origin. It does not prevent username rotation,
+account lockout abuse, denial of service, or cross-host attacks. Do not
+publish the service to the internet; deploy behind an approved gateway with
+additional origin rate limits and centralized monitoring before commercial use.

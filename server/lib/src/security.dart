@@ -126,7 +126,7 @@ class LoginAttemptLimiter {
           : DateTime.parse(row['window_started_at'] as String).toUtc();
       final active = start != null && at.isBefore(start.add(window));
       final failures = active
-          ? ((row!['failure_count'] as int) + 1).clamp(1, maximumFailures)
+          ? ((row['failure_count'] as int) + 1).clamp(1, maximumFailures)
           : 1;
       store.exec('''INSERT INTO login_attempt_limits(identity_hash,failure_count,window_started_at)
         VALUES(?,?,?) ON CONFLICT(identity_hash) DO UPDATE SET

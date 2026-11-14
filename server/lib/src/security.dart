@@ -88,3 +88,59 @@ class AuthService {
   }
   void logout(String token) => store.exec('DELETE FROM sessions WHERE token_hash=?',[hashToken(token)]);
 }
+
+
+/// Durable, per-tenant/per-exact-username failed-login limiter.
+/// It intentionally does not trust client-provided IP headers. This limits
+/// account-targeted guessing, not distributed username spraying.
+class LoginAttemptLimiter {
+  final DatabaseStore store;
+  LoginAttemptLimiter(this.store);
+
+  static const int maximumFailures = 8;
+  static const Duration window = Duration(minutes: 5);
+
+  String _identity(String tenantId, String username) =>
+      hashToken('${tenantId.trim()}\u0000${username.trim()}');
+
+  bool isBlocked(String tenantId, String username, {DateTime? now}) {
+    final at = (now ?? DateTime.now()).toUtc();
+    final row = store.first(
+      'SELECT failure_count,window_started_at FROM login_attempt_limits WHERE identity_hash=?',
+      [_identity(tenantId, username)]);
+    if (row == null) return false;
+    final start = DateTime.parse(row['window_started_at'] as String).toUtc();
+    return at.isBefore(start.add(window)) &&
+        (row['failure_count'] as int) >= maximumFailures;
+  }
+
+  void registerFailure(String tenantId, String username, {DateTime? now}) {
+    final at = (now ?? DateTime.now()).toUtc();
+    final identity = _identity(tenantId, username);
+    store.transaction(() {
+      final row = store.first(
+        'SELECT failure_count,window_started_at FROM login_attempt_limits WHERE identity_hash=?',
+        [identity]);
+      final start = row == null
+          ? null
+          : DateTime.parse(row['window_started_at'] as String).toUtc();
+      final active = start != null && at.isBefore(start.add(window));
+      final failures = active
+          ? ((row!['failure_count'] as int) + 1).clamp(1, maximumFailures)
+          : 1;
+      store.exec('''INSERT INTO login_attempt_limits(identity_hash,failure_count,window_started_at)
+        VALUES(?,?,?) ON CONFLICT(identity_hash) DO UPDATE SET
+        failure_count=excluded.failure_count,
+        window_started_at=excluded.window_started_at''',
+        [identity, failures, (active ? start! : at).toIso8601String()]);
+      // Prevent unbounded growth from stale username probes.
+      store.exec('DELETE FROM login_attempt_limits WHERE window_started_at<?',
+        [at.subtract(const Duration(days: 1)).toIso8601String()]);
+    });
+  }
+
+  void clear(String tenantId, String username) {
+    store.exec('DELETE FROM login_attempt_limits WHERE identity_hash=?',
+      [_identity(tenantId, username)]);
+  }
+}

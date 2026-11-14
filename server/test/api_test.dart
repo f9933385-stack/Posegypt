@@ -192,5 +192,18 @@ void main() {
     final limit=await send('POST','/api/v1/auth/login',body:{
       'tenant_id':setup['tenant_id'],'username':'admin','password':'not-correct'});
     expect(limit.statusCode,429);
+    // A new API instance must not reset a lockout (the state lives in SQLite).
+    api=KasherApi(PosEngine(store),AuthService(store));
+    final validButBlocked=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'admin','password':'a-strong-password-123'});
+    expect(validButBlocked.statusCode,429);
+    expect(store.first('SELECT COUNT(*) n FROM login_attempt_limits')?['n'],1);
+    // Expiry is checked against database time window, without sleeping.
+    store.exec('UPDATE login_attempt_limits SET window_started_at=?',
+      [DateTime.now().toUtc().subtract(const Duration(minutes:6)).toIso8601String()]);
+    final validAfterWindow=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'admin','password':'a-strong-password-123'});
+    expect(validAfterWindow.statusCode,200);
+    expect(store.first('SELECT COUNT(*) n FROM login_attempt_limits')?['n'],0);
   });
 }

@@ -34,7 +34,7 @@ void main(){
       0,0,0,0, // black but transparent -> white
       0,0,0,255, // black opaque -> print
       255,255,255,255, // white -> skip
-      0,0,0,100, // light composited -> skip
+      0,0,0,60, // alpha on white => luminance > 180, skip
     ]);
     final packet=LanEscPosPrinter.encodeRaster(rgba,
       imageWidth:4,imageHeight:1,paperDots:576,cut:true);

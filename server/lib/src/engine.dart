@@ -2255,19 +2255,40 @@ class PosEngine {
     final cash=total('''SELECT COALESCE(SUM(l.debit_minor-l.credit_minor),0) n
       FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
       WHERE e.branch_id=? AND l.account='CASH' ''',[branch]);
-    final creditCustomers=total('''SELECT COALESCE(SUM(l.debit_minor-l.credit_minor),0) n
+    final arBalances=store.rows('''SELECT l.account,
+      SUM(l.debit_minor-l.credit_minor) AS balance
       FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
-      WHERE e.branch_id=? AND l.account LIKE 'AR:%' ''',[branch]);
-    final supplierPayable=total('''SELECT COALESCE(SUM(l.credit_minor-l.debit_minor),0) n
+      WHERE e.branch_id=? AND l.account LIKE 'AR:%' GROUP BY l.account''',[branch]);
+    final creditCustomers=arBalances.fold<int>(0,(sum,row) {
+      final balance=row['balance'] as int;
+      return sum+(balance>0?balance:0);
+    });
+    final customerCredits=arBalances.fold<int>(0,(sum,row) {
+      final balance=row['balance'] as int;
+      return sum+(balance<0?-balance:0);
+    });
+    final apBalances=store.rows('''SELECT l.account,
+      SUM(l.credit_minor-l.debit_minor) AS balance
       FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
-      WHERE e.branch_id=? AND l.account LIKE 'AP:%' ''',[branch]);
+      WHERE e.branch_id=? AND l.account LIKE 'AP:%' GROUP BY l.account''',[branch]);
+    final supplierPayable=apBalances.fold<int>(0,(sum,row) {
+      final balance=row['balance'] as int;
+      return sum+(balance>0?balance:0);
+    });
+    final supplierCredits=apBalances.fold<int>(0,(sum,row) {
+      final balance=row['balance'] as int;
+      return sum+(balance<0?-balance:0);
+    });
     return {'branch_id':branch,'sales_minor':sales-returns,
       'sales_excluding_tax_minor':netRevenue,'sales_tax_minor':outputVat,
       'cost_of_goods_minor':cogs,
       'gross_profit_minor':netRevenue-cogs,'expenses_minor':expenses,
       'estimated_operating_profit_minor':netRevenue-cogs-expenses,
-      'stock_value_minor':stock,'cash_minor':cash,'customer_receivables_minor':creditCustomers,
+      'stock_value_minor':stock,'cash_minor':cash,
+      'customer_receivables_minor':creditCustomers,
+      'customer_credit_balances_minor':customerCredits,
       'supplier_payables_minor':supplierPayable,
+      'supplier_credit_balances_minor':supplierCredits,
       'pending_sync':total('SELECT COUNT(*) n FROM sync_outbox WHERE branch_id=? AND synced_at IS NULL',[branch])};
   }
   List<Map<String,Object?>> audit(Principal p,String branchId) {

@@ -269,6 +269,56 @@ void main() {
       headers:headers)).statusCode,404);
   });
 
+  test('HTTP split receipt is one payment with two documented invoice allocations',() async {
+    final admin=await token();
+    final auth={'authorization':'Bearer $admin'};
+    var count=0;
+    Future<Map<String,dynamic>> create(String endpoint,Map<String,dynamic> data,
+        {String? idempotencyKey}) async {
+      final response=await send('POST','/api/v1/$endpoint',
+        headers:{...auth,'idempotency-key':
+          idempotencyKey ?? 'http-split-account-${count++}-long-key'},
+        body:data);
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+    final supplier=await create('suppliers',{'name':'مورد توزيع دفعات'});
+    final product=await create('products',{
+      'sku':'HTTP-SPLIT-1','name_ar':'شاي','sell_price_minor':500});
+    Future<Map<String,dynamic>> buy(int cost)=>create('purchases',{
+      'branch_id':setup['branch_id'],'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,
+        'unit_cost_minor':cost}],'payments':<Map<String,dynamic>>[]});
+    final a=await buy(700),b=await buy(500);
+    final body=<String,dynamic>{'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],'method':'bank','amount_minor':800,
+      'allocations':[
+        {'invoice_id':a['id'],'amount_minor':500},
+        {'invoice_id':b['id'],'amount_minor':300},
+      ]};
+    const idem='http-split-repeat-key-1234567890';
+    final response=await create('suppliers/payments',body,idempotencyKey:idem);
+    expect(await create('suppliers/payments',body,idempotencyKey:idem),response);
+    final records=response['allocations'] as List<dynamic>;
+    expect(records,hasLength(2));
+    expect(records.map((x)=>(x as Map)['invoice_remaining_minor']).toList(),[200,200]);
+    expect(response['remaining_minor'],400);
+    final url='/api/v1/debts/invoices?branch_id=${setup['branch_id']}&party_id=${supplier['id']}&party_type=supplier';
+    final list=await send('GET',url,headers:auth);
+    expect(list.statusCode,200);
+    final data=jsonDecode(await list.readAsString()) as Map;
+    expect(data['balance_minor'],400);
+    expect((data['invoices'] as List).length,2);
+    expect(store.rows('SELECT * FROM payments WHERE document_id IS NULL'),hasLength(1));
+    expect(store.rows('SELECT * FROM debt_allocation_lines'),hasLength(2));
+    final invalid=await send('POST','/api/v1/suppliers/payments',
+      headers:{...auth,'idempotency-key':'http-split-invalid-key-12345678'},
+      body:{...body,'amount_minor':799});
+    expect(invalid.statusCode,409);
+    expect(store.rows('SELECT * FROM debt_allocation_lines'),hasLength(2));
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

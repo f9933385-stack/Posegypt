@@ -222,6 +222,53 @@ void main() {
       headers:scoped)).statusCode,404);
   });
 
+  test('HTTP invoice allocation returns audited remaining amounts and is idempotent',() async {
+    final admin=await token();
+    var i=0;
+    Future<Map<String,dynamic>> post(String route,Map<String,dynamic> body,
+        {String? key}) async {
+      final response=await send('POST','/api/v1/$route',body:body,
+        headers:{'authorization':'Bearer $admin',
+          'idempotency-key':key ?? 'http-invoice-alloc-${i++}-123456789'});
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+    final supplier=await post('suppliers',{'name':'مورد تخصيص'});
+    final product=await post('products',{
+      'sku':'INV-HTTP-1','name_ar':'بقوليات','sell_price_minor':250});
+    final invoice=await post('purchases',{
+      'branch_id':setup['branch_id'],'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,
+        'unit_cost_minor':700}],'payments':<Map<String,dynamic>>[]});
+    final headers={'authorization':'Bearer $admin'};
+    final path='/api/v1/debts/invoices?branch_id=${setup['branch_id']}&party_id=${supplier['id']}&party_type=supplier';
+    final list=await send('GET',path,headers:headers);
+    expect(list.statusCode,200);
+    final before=jsonDecode(await list.readAsString()) as Map;
+    expect(before['allocation_available'],true);
+    expect((before['invoices'] as List).single['remaining_minor'],700);
+    const paymentKey='http-invoice-alloc-retry-key-12345678';
+    final body={'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],'invoice_id':invoice['id'],
+      'method':'cash','amount_minor':200};
+    final first=await post('suppliers/payments',body,key:paymentKey);
+    final again=await post('suppliers/payments',body,key:paymentKey);
+    expect(again,first);
+    expect(first['invoice_remaining_minor'],500);
+    final afterResp=await send('GET',path,headers:headers);
+    final after=jsonDecode(await afterResp.readAsString()) as Map;
+    expect((after['invoices'] as List).single['remaining_minor'],500);
+    expect(after['balance_minor'],500);
+    expect(store.rows('SELECT * FROM debt_allocations'),hasLength(1));
+    expect((await send('GET',
+      '/api/v1/debts/invoices?branch_id=${setup['branch_id']}&party_id=${supplier['id']}&party_type=invalid',
+      headers:headers)).statusCode,400);
+    expect((await send('GET',
+      '/api/v1/debts/invoices?branch_id=${setup['branch_id']}&party_id=missing&party_type=supplier',
+      headers:headers)).statusCode,404);
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

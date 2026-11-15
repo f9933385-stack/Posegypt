@@ -360,16 +360,16 @@ behaviour. Creating the **first** drawer permanently opts that branch into
 independent drawer mode; the shared shift must be closed first.
 
 - `GET /api/v1/shifts/drawers?branch_id=...` returns registered drawer IDs,
-  names, active flags, and current open-shift IDs for owner/manager/cashier.
+  names, active flags, and current open-shift IDs for owner/manager/cashier/purchasing.
 - `POST /api/v1/shifts/drawers` (owner/manager, idempotent) accepts
   `{branch_id,name}` (maximum 32 drawers per branch; names unique).
 - `POST /api/v1/shifts/open` accepts `{branch_id,opening_minor,
-  cash_drawer_id}` in independent mode; cashier/manager/owner opens
+  cash_drawer_id}` in independent mode; cashier/purchasing/manager/owner opens
   a shift as themselves on an available active drawer. One active shift
   per drawer and operator is enforced by SQLite partial unique indexes.
 - `GET /api/v1/shifts?branch_id=...` additionally returns
   `drawer_id`, `drawer_name`, and `operator_name`.
-  Cashiers see only their shifts and never the expected amount on an open
+  Cashiers and purchasing staff see only their shifts and never the expected amount on an open
   shift.
 - `POST /api/v1/shifts/close` accepts `{branch_id,shift_id,
   closing_actual_minor}`; if a manager/owner closes another operator's

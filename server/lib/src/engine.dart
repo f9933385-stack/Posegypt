@@ -774,7 +774,8 @@ class PosEngine {
     (store.first('''SELECT COALESCE(SUM(p.amount_minor),0) AS total
       FROM payments p WHERE p.branch_id=? AND p.party_id=?
         AND p.document_id IS NULL AND p.direction=?
-        AND NOT EXISTS (SELECT 1 FROM debt_allocations a WHERE a.payment_id=p.id)''',
+        AND NOT EXISTS (SELECT 1 FROM debt_allocations a WHERE a.payment_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM debt_allocation_lines a WHERE a.payment_id=p.id)''',
       [branch,party,customer?'in':'out'])!['total'] as int);
 
   Map<String,Object?> _invoiceRemaining(Principal p,String branch,
@@ -786,8 +787,11 @@ class PosEngine {
         AND kind=? AND state='posted' ''',
       [invoiceId,p.tenantId,branch,party,kind]);
     if(invoice==null) throw DomainError('Invoice not found for this party and branch',404);
-    final linked=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
-      FROM debt_allocations WHERE document_id=?''',[invoiceId])!['total'] as int;
+    final linked=store.first('''SELECT
+        (SELECT COALESCE(SUM(amount_minor),0) FROM debt_allocations
+          WHERE document_id=?) +
+        (SELECT COALESCE(SUM(amount_minor),0) FROM debt_allocation_lines
+          WHERE document_id=?) AS total''',[invoiceId,invoiceId])!['total'] as int;
     final returns=store.rows('''SELECT total_minor,snapshot_json FROM documents
       WHERE tenant_id=? AND branch_id=? AND party_id=? AND original_id=?
         AND kind=? AND state='posted' ''',
@@ -845,15 +849,52 @@ class PosEngine {
     final outstanding=_branchAccountBalance(account,branch) * (customer?1:-1);
     if(amount>outstanding) throw DomainError('Amount exceeds outstanding debt',409);
     final targetId=input['invoice_id'];
+    final splitRaw=input['allocations'];
+    if(targetId!=null && splitRaw!=null) {
+      throw DomainError('Choose invoice_id or allocations, not both');
+    }
     Map<String,Object?>? invoice;
+    final splitInvoices=<Map<String,Object?>>[];
+    final splitAmounts=<int>[];
+    if(targetId!=null || splitRaw!=null) {
+      if(_unallocatedSettlements(branch,party,customer:customer)>0) {
+        throw DomainError('Legacy unallocated payments require reconciliation before targeting invoices',409);
+      }
+    }
     if(targetId!=null) {
       final documentId=nonEmpty(targetId,'invoice_id');
-      if(_unallocatedSettlements(branch,party,customer:customer)>0) {
-        throw DomainError('Legacy unallocated payments require reconciliation before targeting an invoice',409);
-      }
       invoice=_invoiceRemaining(p,branch,party,documentId,customer:customer);
       if(amount>(invoice['remaining_minor'] as int)) {
         throw DomainError('Amount exceeds this invoice remaining balance',409);
+      }
+    }
+    if(splitRaw!=null) {
+      if(splitRaw is! List || splitRaw.isEmpty || splitRaw.length>20) {
+        throw DomainError('Expected 1..20 invoice allocations');
+      }
+      final used=<String>{};
+      var totalAllocated=0;
+      for(final item in splitRaw) {
+        if(item is! Map) throw DomainError('Invalid invoice allocation');
+        final documentId=nonEmpty(item['invoice_id'],'invoice_id');
+        if(!used.add(documentId)) {
+          throw DomainError('Invoice cannot appear twice in one payment',409);
+        }
+        final value=strictInt(item['amount_minor'],'amount_minor',min:1);
+        final target=_invoiceRemaining(p,branch,party,documentId,
+          customer:customer);
+        if(value>(target['remaining_minor'] as int)) {
+          throw DomainError('Amount exceeds this invoice remaining balance',409);
+        }
+        totalAllocated+=value;
+        if(totalAllocated>amount) {
+          throw DomainError('Invoice allocations exceed payment total',409);
+        }
+        splitInvoices.add(target);
+        splitAmounts.add(value);
+      }
+      if(totalAllocated!=amount) {
+        throw DomainError('Invoice allocations must equal payment total',409);
       }
     }
     final id=_id(),direction=customer?'in':'out';
@@ -865,17 +906,34 @@ class PosEngine {
         VALUES(?,?,?,?,?,?,?,?)''',[_id(),id,invoice['id'],branch,party,
           customer?'customer':'supplier',amount,_now()]);
     }
+    for(var i=0;i<splitInvoices.length;i++) {
+      store.exec('''INSERT INTO debt_allocation_lines(
+        id,payment_id,document_id,branch_id,party_id,party_type,amount_minor,created_at)
+        VALUES(?,?,?,?,?,?,?,?)''',[_id(),id,splitInvoices[i]['id'],branch,party,
+          customer?'customer':'supplier',splitAmounts[i],_now()]);
+    }
     _post(p,branch,direction,id,customer
       ? [LedgerLine(payAcc,debit:amount),LedgerLine(account,credit:amount)]
       : [LedgerLine(account,debit:amount),LedgerLine(payAcc,credit:amount)]);
+    final allocationResults=<Map<String,Object?>>[
+      for(var i=0;i<splitInvoices.length;i++) {
+        'invoice_id':splitInvoices[i]['id'],
+        'amount_minor':splitAmounts[i],
+        'invoice_remaining_minor':
+          (splitInvoices[i]['remaining_minor'] as int)-splitAmounts[i],
+      }
+    ];
     _audit(p,'debt.$direction',id,{'party_id':party,'amount_minor':amount,
-      if(invoice!=null) 'invoice_id':invoice['id']},branch);
+      if(invoice!=null) 'invoice_id':invoice['id'],
+      if(allocationResults.isNotEmpty) 'allocations':allocationResults},branch);
     _outbox(branch,'payment',{'id':id,'party_id':party,'direction':direction,
-      if(invoice!=null) 'invoice_id':invoice['id']});
+      if(invoice!=null) 'invoice_id':invoice['id'],
+      if(allocationResults.isNotEmpty) 'allocations':allocationResults});
     return {'id':id,'remaining_minor':outstanding-amount,
       if(invoice!=null) 'invoice_id':invoice['id'],
       if(invoice!=null) 'invoice_remaining_minor':
-        (invoice['remaining_minor'] as int)-amount};
+        (invoice['remaining_minor'] as int)-amount,
+      if(allocationResults.isNotEmpty) 'allocations':allocationResults};
   }
 
   Map<String,Object?> _expense(Principal p,Map<String,dynamic> input) {

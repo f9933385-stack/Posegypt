@@ -512,3 +512,31 @@ const schemaV15 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_cash_shift_journal_links_shift
     ON cash_shift_journal_links(shift_id,created_at)'''
 ];
+
+
+/// V16: documented, two-operator transfer between physical drawer shifts.
+/// A transfer reallocates existing cash, never posts a second general-ledger
+/// CASH entry. Only an accepted transfer affects either shift's expectation.
+const schemaV16 = <String>[
+  '''CREATE TABLE IF NOT EXISTS cash_drawer_transfers (
+    id TEXT PRIMARY KEY,
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    source_shift_id TEXT NOT NULL REFERENCES cash_shifts(id),
+    destination_shift_id TEXT NOT NULL REFERENCES cash_shifts(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','cancelled')),
+    requested_by TEXT NOT NULL REFERENCES users(id),
+    reviewed_by TEXT REFERENCES users(id),
+    requested_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    review_reason TEXT,
+    CHECK(source_shift_id<>destination_shift_id)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_drawer_transfers_branch
+    ON cash_drawer_transfers(branch_id,requested_at,id)''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_drawer_transfers_source
+    ON cash_drawer_transfers(source_shift_id,status)''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_drawer_transfers_destination
+    ON cash_drawer_transfers(destination_shift_id,status)'''
+];

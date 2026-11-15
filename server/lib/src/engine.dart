@@ -1913,7 +1913,11 @@ class PosEngine {
     }
     String? overrideReason;
     if(shift['drawer_id']!=null && shift['user_id']!=p.id) {
-      overrideReason=nonEmpty(input['override_reason'],'override_reason');
+      final supplied=input['override_reason'];
+      if(supplied is! String || supplied.trim().isEmpty) {
+        throw DomainError('Supervisor override reason is required',400);
+      }
+      overrideReason=supplied.trim();
       if(overrideReason.length<12 || overrideReason.length>500) {
         throw DomainError('Supervisor override reason must be 12..500 characters');
       }

@@ -102,7 +102,7 @@ void main() {
     } finally {raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],13);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
       expect(upgraded.first("SELECT amount_minor FROM debt_allocations WHERE id='ALLOC'")?['amount_minor'],100);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],100);
       expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_allocation_lines'")?['name'],
@@ -161,7 +161,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],13);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],300);
       expect(upgraded.first("SELECT COUNT(*) AS n FROM debt_allocation_lines WHERE payment_id='PAY'")?['n'],2);
       expect(upgraded.first("SELECT SUM(amount_minor) AS total FROM debt_allocation_lines WHERE payment_id='PAY'")?['total'],300);

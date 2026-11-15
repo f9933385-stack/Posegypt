@@ -394,3 +394,46 @@ handoff, cash deposit journal workflow, or shared cashier session
 identity; cash transactions without an actor's open drawer shift are
 blocked once independent drawers are enabled. See
 [Arabic operator guide](MULTI_CASH_DRAWERS_AR.md).
+
+
+## Physical cash handover between open independent drawers (schema v16)
+
+**Scope:** one branch-local SQLite server, two **different cashiers**
+and **two open physical drawer shifts**. This transfers existing
+banknotes between shift expectations. It deliberately **does not
+post a new general-ledger CASH entry**.
+
+The following endpoints require a bearer session; POST endpoints
+require a unique 16–128 character `Idempotency-Key`:
+
+- `GET /api/v1/shifts/transfers?branch_id=...` lists up to 200
+  transfers (owner/manager can inspect the branch; cashier/purchasing
+  users only see transfers involving their shifts).
+- `POST /api/v1/shifts/transfers` accepts
+  `{branch_id, source_shift_id, destination_shift_id, amount_minor,
+  reason}` (positive integer piasters, reason length 12–500).
+  The source shift **must belong to the authenticated actor**; both
+  shifts are in the same branch, open, active and owned by different
+  users. The amount cannot exceed the sender's current expected cash.
+  Returns a `pending` record and posts **no** cash change.
+- `POST /api/v1/shifts/transfers/approve` accepts
+  `{transfer_id,reason}` and can only be performed by the owner
+  of the **destination shift**. It rechecks both shifts and the
+  available source balance within a single SQLite transaction.
+  On approval, the source shift expectation decreases and the
+  destination's increases by exactly the same amount.
+- `POST /api/v1/shifts/transfers/reject` requires the receiving
+  cashier and review reason. No balances change.
+- `POST /api/v1/shifts/transfers/cancel` requires the original
+  sender and reason. No balances change.
+
+Both shifts are blocked from closing while they have pending
+transfers. Review decisions are idempotent, immutable, audited and
+added to the branch outbox. Existing journal balances remain
+unchanged, and drawer closing now includes approved incoming minus
+outgoing transfers in addition to the shift's own CASH journal lines.
+
+Not implemented: central safe/cash-vault transfers, bank deposits,
+cross-branch transfers, physical banknote reconciliation or third-party
+cash drawer hardware integration. See
+[Arabic operating guide](CASH_DRAWER_TRANSFERS_AR.md).

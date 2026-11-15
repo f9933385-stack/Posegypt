@@ -1110,6 +1110,30 @@ class PosEngine {
         '${customer?'AR':'AP'}:$party',branch)*(customer?1:-1)};
   }
 
+  List<Map<String,Object?>> _availableDebtCredits(Principal p,
+      String branch,String party,{required bool customer}) {
+    final kind=customer?'sale_return':'purchase_return';
+    final rows=store.rows('''SELECT r.id,r.number,r.total_minor,r.original_id,
+      r.created_at,o.number AS original_number
+      FROM documents r LEFT JOIN documents o ON o.id=r.original_id
+      WHERE r.tenant_id=? AND r.branch_id=? AND r.party_id=?
+        AND r.kind=? AND r.state='posted'
+      ORDER BY r.created_at,r.id LIMIT 501''',
+      [p.tenantId,branch,party,kind]);
+    final result=<Map<String,Object?>>[];
+    for(final row in rows.take(500)) {
+      final full=store.first('SELECT snapshot_json FROM documents WHERE id=?',
+        [row['id']])!;
+      final snapshot=jsonDecode(full['snapshot_json'] as String);
+      if(snapshot is! Map) throw DomainError('Credit note snapshot is invalid',409);
+      if(snapshot['refund_method']!='credit')continue;
+      final available=_creditSourceAvailable(
+        row['id'] as String,row['total_minor'] as int);
+      if(available>0) result.add({...row,'available_minor':available});
+    }
+    return result;
+  }
+
   Map<String,Object?> listDebtInvoices(Principal p,String branchId,
       String partyId,{required bool customer}) {
     _allow(p,customer?['owner','manager','cashier']:
@@ -1129,12 +1153,17 @@ class PosEngine {
         customer:customer);
       if((invoice['remaining_minor'] as int)>0) items.add(invoice);
     }
+    final credits=_availableDebtCredits(p,branch,party,customer:customer);
+    final availableCredit=credits.fold<int>(0,
+      (sum,row)=>sum+(row['available_minor'] as int));
     return {'branch_id':branch,'party_id':party,
       'party_type':customer?'customer':'supplier',
       'balance_minor':_branchAccountBalance(
         '${customer?'AR':'AP'}:$party',branch)*(customer?1:-1),
       'unallocated_settlements_minor':unallocated,
       'allocation_available':unallocated==0,
+      'available_credit_minor':availableCredit,
+      'credit_notes':credits,
       'has_more':documents.length>500,'invoices':items};
   }
 
@@ -1864,6 +1893,9 @@ class PosEngine {
     final doc=_document(p,branch,warehouse,'sale_return',customer,net,0,tax,total,
       refundMethod=='cash'?total:0,cogs,
       {'original_id':original,'lines':lines,'refund_method':refundMethod},original:original);
+    if(refundMethod=='credit') {
+      _applyReturnCreditToOriginal(p,branch,customer!,doc,original,total,customer:true);
+    }
     for(final line in lines) {
       _stock(p,branch,warehouse,line['product_id'] as String,line['qty'] as int,line['cost'] as int,'sale_return',doc);
       final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
@@ -1929,6 +1961,9 @@ class PosEngine {
     if(total<=0) throw DomainError('Empty supplier credit');
     final doc=_documentWithId(docId,p,branch,warehouse,'purchase_return',supplier,net,0,tax,total,refundMethod=='cash'?total:0,stockCost,
       {'original_id':original,'lines':lines,'refund_method':refundMethod},original:original);
+    if(refundMethod=='credit') {
+      _applyReturnCreditToOriginal(p,branch,supplier,doc,original,total,customer:false);
+    }
     for(final line in lines) {
       final lineId=_line(doc,line['product_id'] as String,line['qty'] as int,0,0,line['tax'] as int,line['cost'] as int,
         originalLine:line['original_line_id'] as String);

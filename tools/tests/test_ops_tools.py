@@ -248,6 +248,63 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         con.close()
         self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
 
+    def test_independent_drawer_cash_links_and_operator_scope_are_audited(self):
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO cash_drawers(id,branch_id,name,created_by,created_at)
+          VALUES('DRAWER','B','Till One','U','zzzz')
+        """)
+        con.execute("""
+          INSERT INTO cash_shifts(id,branch_id,user_id,drawer_id,
+            opening_minor,opened_at)
+          VALUES('SHIFT','B','U','DRAWER',1000,'zzzz')
+        """)
+        con.execute("""
+          INSERT INTO journal_entries(id,branch_id,reference_type,reference_id,
+            created_by,created_at)
+          VALUES('CASHJ','B','sale','CASHSALE','U','zzzz')
+        """)
+        con.execute("""
+          INSERT INTO journal_lines(id,entry_id,account,debit_minor,credit_minor)
+          VALUES('CASH1','CASHJ','CASH',200,0)
+        """)
+        con.execute("""
+          INSERT INTO journal_lines(id,entry_id,account,debit_minor,credit_minor)
+          VALUES('CASH2','CASHJ','SALES_REVENUE',0,200)
+        """)
+        con.commit()
+        con.close()
+        self.assertIn('cash_shift_unattributed_cash',audit(str(self.db))['errors'])
+
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO cash_shift_journal_links(
+            journal_entry_id,shift_id,cash_delta_minor,created_at)
+          VALUES('CASHJ','SHIFT',200,'zzzz')
+        """)
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          UPDATE cash_shift_journal_links SET cash_delta_minor=199
+          WHERE journal_entry_id='CASHJ'
+        """)
+        con.commit()
+        con.close()
+        self.assertIn('cash_shift_posting_integrity',audit(str(self.db))['errors'])
+
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          UPDATE cash_shift_journal_links SET cash_delta_minor=200
+          WHERE journal_entry_id='CASHJ'
+        """)
+        con.execute("UPDATE journal_entries SET created_by='ANOTHER' WHERE id='CASHJ'")
+        con.commit()
+        con.close()
+        self.assertIn('cash_shift_posting_integrity',audit(str(self.db))['errors'])
+
     def test_return_credit_application_scope_and_totals_are_audited(self):
         con=sqlite3.connect(self.db)
         con.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('CRED_SUP','T','Supplier','now')")

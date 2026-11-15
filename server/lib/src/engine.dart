@@ -171,6 +171,7 @@ class PosEngine {
       case 'debt_reconciliation_request': return _requestDebtReconciliation(p,input);
       case 'debt_reconciliation_approve': return _reviewDebtReconciliation(p,input,approve:true);
       case 'debt_reconciliation_reject': return _reviewDebtReconciliation(p,input,approve:false);
+      case 'debt_credit_apply': return _applyDebtCredit(p,input);
       case 'expense': return _expense(p,input);
       case 'count_open': return _openCount(p,input);
       case 'count_line': return _recordCountLine(p,input);
@@ -1007,22 +1008,106 @@ class PosEngine {
           WHERE document_id=?) +
         (SELECT COALESCE(SUM(amount_minor),0) FROM debt_allocation_lines
           WHERE document_id=?) AS total''',[invoiceId,invoiceId])!['total'] as int;
-    final returns=store.rows('''SELECT total_minor,snapshot_json FROM documents
-      WHERE tenant_id=? AND branch_id=? AND party_id=? AND original_id=?
-        AND kind=? AND state='posted' ''',
-      [p.tenantId,branch,party,invoiceId,
-        customer?'sale_return':'purchase_return']);
-    var credited=0;
-    for(final row in returns) {
-      final snapshot=jsonDecode(row['snapshot_json'] as String);
-      if(snapshot is! Map) throw DomainError('Return snapshot is invalid',409);
-      if(snapshot['refund_method']=='credit') credited+=row['total_minor'] as int;
-    }
+    final credited=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM debt_credit_allocations WHERE document_id=?''',[invoiceId])!['total'] as int;
     final due=(invoice['total_minor'] as int)-
       (invoice['paid_minor'] as int)-credited-linked;
+    final sourceKind=customer?'sale_return':'purchase_return';
+    final credits=store.rows('''SELECT r.id,r.total_minor FROM documents r
+      WHERE r.tenant_id=? AND r.branch_id=? AND r.party_id=?
+        AND r.original_id=? AND r.kind=? AND r.state='posted' ''',
+      [p.tenantId,branch,party,invoiceId,sourceKind]);
+    var excess=0;
+    for(final credit in credits) {
+      final allocated=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+        FROM debt_credit_allocations WHERE credit_document_id=?''',
+        [credit['id']])!['total'] as int;
+      final available=(credit['total_minor'] as int)-allocated;
+      if(available>0) excess+=available;
+    }
     return {...invoice,'return_credit_minor':credited,
       'allocated_minor':linked,'remaining_minor':due>0?due:0,
-      'excess_credit_minor':due<0?-due:0};
+      'excess_credit_minor':excess};
+  }
+
+  Map<String,Object?> _creditSource(Principal p,String branch,String party,
+      String creditId,{required bool customer}) {
+    final kind=customer?'sale_return':'purchase_return';
+    final source=store.first('''SELECT id,tenant_id,branch_id,party_id,kind,
+      original_id,number,total_minor,snapshot_json,created_at
+      FROM documents WHERE id=? AND tenant_id=? AND branch_id=?
+        AND party_id=? AND kind=? AND state='posted' ''',
+      [creditId,p.tenantId,branch,party,kind]);
+    if(source==null) throw DomainError('Credit note not found for this party and branch',404);
+    final snapshot=jsonDecode(source['snapshot_json'] as String);
+    if(snapshot is! Map || snapshot['refund_method']!='credit') {
+      throw DomainError('Only credit-refund return notes can be applied',409);
+    }
+    return source;
+  }
+
+  int _creditSourceAvailable(String creditId,int total) {
+    final allocated=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM debt_credit_allocations WHERE credit_document_id=?''',[creditId])!['total'] as int;
+    final available=total-allocated;
+    if(available<0) throw DomainError('Credit note allocations exceed its value',409);
+    return available;
+  }
+
+  void _applyReturnCreditToOriginal(Principal p,String branch,String party,
+      String creditId,String originalId,int total,{required bool customer}) {
+    final original=_invoiceRemaining(p,branch,party,originalId,customer:customer);
+    final remaining=original['remaining_minor'] as int;
+    final applied=total<remaining?total:remaining;
+    if(applied<=0)return;
+    store.exec('''INSERT INTO debt_credit_allocations(
+      id,credit_document_id,document_id,branch_id,party_id,party_type,
+      amount_minor,reason,created_by,created_at)
+      VALUES(?,?,?,?,?,?,?,'automatic credit against original invoice',?,?)''',
+      [_id(),creditId,originalId,branch,party,
+        customer?'customer':'supplier',applied,p.id,_now()]);
+  }
+
+  Map<String,Object?> _applyDebtCredit(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,input['branch_id']);
+    final type=nonEmpty(input['party_type'],'party_type');
+    if(type!='customer' && type!='supplier') throw DomainError('Invalid party_type');
+    final customer=type=='customer';
+    final party=nonEmpty(input['party_id'],'party_id');
+    _party(customer?'customers':'suppliers',p,party);
+    final creditId=nonEmpty(input['credit_document_id'],'credit_document_id');
+    final invoiceId=nonEmpty(input['invoice_id'],'invoice_id');
+    final amount=strictInt(input['amount_minor'],'amount_minor',min:1);
+    final reason=nonEmpty(input['reason'],'reason');
+    if(reason.length<12 || reason.length>1000) {
+      throw DomainError('Credit application reason must contain 12..1000 characters');
+    }
+    final source=_creditSource(p,branch,party,creditId,customer:customer);
+    final available=_creditSourceAvailable(creditId,source['total_minor'] as int);
+    if(amount>available) throw DomainError('Amount exceeds available credit note balance',409);
+    final invoice=_invoiceRemaining(p,branch,party,invoiceId,customer:customer);
+    if(amount>(invoice['remaining_minor'] as int)) {
+      throw DomainError('Amount exceeds target invoice remaining balance',409);
+    }
+    store.exec('''INSERT INTO debt_credit_allocations(
+      id,credit_document_id,document_id,branch_id,party_id,party_type,
+      amount_minor,reason,created_by,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)''',
+      [_id(),creditId,invoiceId,branch,party,type,amount,reason,p.id,_now()]);
+    final creditRemaining=available-amount;
+    final invoiceRemaining=(invoice['remaining_minor'] as int)-amount;
+    _audit(p,'debt.credit.apply',creditId,{'invoice_id':invoiceId,
+      'party_id':party,'party_type':type,'amount_minor':amount,
+      'credit_remaining_minor':creditRemaining,'reason':reason},branch);
+    _outbox(branch,'debt_credit_allocation',{'credit_document_id':creditId,
+      'invoice_id':invoiceId,'party_id':party,'party_type':type,
+      'amount_minor':amount});
+    return {'credit_document_id':creditId,'invoice_id':invoiceId,
+      'amount_minor':amount,'credit_remaining_minor':creditRemaining,
+      'invoice_remaining_minor':invoiceRemaining,
+      'balance_minor':_branchAccountBalance(
+        '${customer?'AR':'AP'}:$party',branch)*(customer?1:-1)};
   }
 
   Map<String,Object?> listDebtInvoices(Principal p,String branchId,

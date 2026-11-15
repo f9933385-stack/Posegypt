@@ -1013,12 +1013,14 @@ class PosEngine {
     final due=(invoice['total_minor'] as int)-
       (invoice['paid_minor'] as int)-credited-linked;
     final sourceKind=customer?'sale_return':'purchase_return';
-    final credits=store.rows('''SELECT r.id,r.total_minor FROM documents r
-      WHERE r.tenant_id=? AND r.branch_id=? AND r.party_id=?
+    final credits=store.rows('''SELECT r.id,r.total_minor,r.snapshot_json
+      FROM documents r WHERE r.tenant_id=? AND r.branch_id=? AND r.party_id=?
         AND r.original_id=? AND r.kind=? AND r.state='posted' ''',
       [p.tenantId,branch,party,invoiceId,sourceKind]);
     var excess=0;
     for(final credit in credits) {
+      final snapshot=jsonDecode(credit['snapshot_json'] as String);
+      if(snapshot is! Map || snapshot['refund_method']!='credit')continue;
       final allocated=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
         FROM debt_credit_allocations WHERE credit_document_id=?''',
         [credit['id']])!['total'] as int;

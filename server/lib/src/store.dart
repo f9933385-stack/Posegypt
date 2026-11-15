@@ -20,7 +20,7 @@ class DatabaseStore {
         final ver = db.select('SELECT MAX(version) AS version FROM schema_version').first['version'] as int? ?? 0;
         // Never downgrade/migrate a database created by newer application code.
         // A silent open could corrupt future schema or financial records.
-        if (ver > 11) throw StateError('Database schema $ver is newer than supported schema 11');
+        if (ver > 12) throw StateError('Database schema $ver is newer than supported schema 12');
         if (ver < 1) {
           for (final stmt in schemaV1) { db.execute(stmt); }
           db.execute('INSERT INTO schema_version(version) VALUES(1)');
@@ -65,6 +65,10 @@ class DatabaseStore {
           for (final stmt in schemaV11) { db.execute(stmt); }
           db.execute('INSERT INTO schema_version(version) VALUES(11)');
         }
+        if (ver < 12) {
+          for (final stmt in schemaV12) { db.execute(stmt); }
+          db.execute('INSERT INTO schema_version(version) VALUES(12)');
+        }
         db.execute('COMMIT');
       } catch (_) {
         db.execute('ROLLBACK');
@@ -91,6 +95,7 @@ class DatabaseStore {
     for (final stmt in schemaV9) { db.execute(stmt); }
     for (final stmt in schemaV10) { db.execute(stmt); }
     for (final stmt in schemaV11) { db.execute(stmt); }
+    for (final stmt in schemaV12) { db.execute(stmt); }
     return DatabaseStore._(db);
   }
 

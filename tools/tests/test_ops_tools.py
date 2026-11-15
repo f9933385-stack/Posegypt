@@ -213,6 +213,41 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         result=audit(str(self.db))
         self.assertNotIn('invoice_allocation_consistency',result['errors'])
 
+    def test_split_payment_total_and_scope_tampering_is_detected(self):
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('SUP','T','Supplier','now')")
+        for invoice in ('INV1', 'INV2'):
+            con.execute("""
+              INSERT INTO documents(id,tenant_id,branch_id,warehouse_id,kind,number,
+                party_id,subtotal_minor,discount_minor,tax_minor,total_minor,
+                paid_minor,cost_minor,snapshot_json,created_by,created_at)
+              VALUES(?, 'T','B','W','purchase',?,'SUP',100,0,0,100,0,100,'{}','U','now')
+            """,(invoice, invoice))
+        con.execute("""
+          INSERT INTO payments(id,branch_id,party_id,method,direction,amount_minor,created_at)
+          VALUES('SPLITPAY','B','SUP','cash','out',100,'now')
+        """)
+        for a, invoice in (('A1','INV1'),('A2','INV2')):
+            con.execute("""
+              INSERT INTO debt_allocation_lines(id,payment_id,document_id,
+                branch_id,party_id,party_type,amount_minor,created_at)
+              VALUES(?, 'SPLITPAY', ?, 'B','SUP','supplier',50,'now')
+            """, (a, invoice))
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE debt_allocation_lines SET amount_minor=30 WHERE id='A2'")
+        con.commit()
+        con.close()
+        self.assertIn('split_payment_amounts',audit(str(self.db))['errors'])
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE debt_allocation_lines SET amount_minor=50 WHERE id='A2'")
+        con.execute("UPDATE debt_allocation_lines SET party_id='MISMATCH' WHERE id='A1'")
+        con.commit()
+        con.close()
+        self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

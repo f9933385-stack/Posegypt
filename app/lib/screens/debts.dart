@@ -287,7 +287,8 @@ class _DebtsState extends State<DebtsPage> {
                 Text('يوجد رصيد مرتجع غير مستخدم بقيمة ${money(availableCredit)}',
                   style:TextStyle(color:Theme.of(context).colorScheme.primary,
                     fontWeight:FontWeight.w600)),
-                if((widget.role=='owner' || widget.role=='manager') &&
+                if(data['allocation_available']==true &&
+                    (widget.role=='owner' || widget.role=='manager') &&
                     invoices.isNotEmpty && credits.isNotEmpty) ...[
                   const SizedBox(height:8),
                   OutlinedButton.icon(

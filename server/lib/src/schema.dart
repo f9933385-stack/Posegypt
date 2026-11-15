@@ -421,3 +421,38 @@ const schemaV12 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_debt_allocation_lines_payment
     ON debt_allocation_lines(payment_id)'''
 ];
+
+
+/// V13: explicit two-person review of legacy debt-payment allocations.
+/// Drafts never affect the cash ledger. An approval links an *existing*
+/// payment to invoices without posting a second payment or journal entry.
+const schemaV13 = <String>[
+  '''CREATE TABLE IF NOT EXISTS debt_reconciliations (
+    id TEXT PRIMARY KEY,
+    payment_id TEXT NOT NULL REFERENCES payments(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    party_id TEXT NOT NULL,
+    party_type TEXT NOT NULL CHECK(party_type IN ('customer','supplier')),
+    status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+    reason TEXT NOT NULL,
+    requested_by TEXT NOT NULL REFERENCES users(id),
+    reviewed_by TEXT REFERENCES users(id),
+    requested_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    review_reason TEXT
+  )''',
+  '''CREATE UNIQUE INDEX IF NOT EXISTS ix_debt_reconciliations_active
+    ON debt_reconciliations(payment_id)
+    WHERE status IN ('pending','approved')''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_reconciliations_branch
+    ON debt_reconciliations(branch_id,party_id,status,requested_at)''',
+  '''CREATE TABLE IF NOT EXISTS debt_reconciliation_lines (
+    id TEXT PRIMARY KEY,
+    reconciliation_id TEXT NOT NULL REFERENCES debt_reconciliations(id),
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    UNIQUE(reconciliation_id,document_id)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_reconciliation_lines_request
+    ON debt_reconciliation_lines(reconciliation_id)'''
+];

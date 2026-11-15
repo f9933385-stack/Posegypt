@@ -3,6 +3,7 @@ import '../services/api.dart';
 import '../models/formats.dart';
 import '../widgets/common.dart';
 import 'cash_transfers.dart';
+import 'cash_safe.dart';
 
 /// A branch can operate legacy one-shift mode or opt into independently
 /// attributed drawers. Cash entries are assigned by the server to the
@@ -214,6 +215,8 @@ class _ShiftsPageState extends State<ShiftsPage> {
             ]);
           })),
         CashTransfersSection(api:widget.api,branchId:widget.branchId,
+          role:widget.role,userId:widget.userId,onChanged:_reload),
+        CashSafeSection(api:widget.api,branchId:widget.branchId,
           role:widget.role,userId:widget.userId,onChanged:_reload),
       ]));
 }

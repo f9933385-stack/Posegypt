@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'schema.dart';
@@ -5,6 +6,48 @@ import 'schema.dart';
 class DatabaseStore {
   final Database db;
   DatabaseStore._(this.db);
+
+  /// Preserve historical credit-note reductions when upgrading v13.
+  /// The excess amount remains an unapplied credit note.
+  static void _backfillLegacyCreditNotes(Database db) {
+    final returns=db.select('''SELECT id,tenant_id,branch_id,party_id,kind,
+      original_id,total_minor,created_at,created_by,snapshot_json
+      FROM documents WHERE state='posted'
+        AND kind IN ('sale_return','purchase_return')
+      ORDER BY branch_id,party_id,original_id,created_at,id''');
+    for(final row in returns) {
+      final snapshot=jsonDecode(row['snapshot_json'] as String);
+      if(snapshot is! Map) throw StateError('Invalid return snapshot during v14 migration');
+      if(snapshot['refund_method']!='credit') continue;
+      final originalId=row['original_id'] as String?;
+      if(originalId==null) continue;
+      final expectedKind=row['kind']=='sale_return'?'sale':'purchase';
+      final originals=db.select('''SELECT id,total_minor,paid_minor
+        FROM documents WHERE id=? AND tenant_id=? AND branch_id=?
+          AND party_id=? AND kind=? AND state='posted' ''',
+        [originalId,row['tenant_id'],row['branch_id'],row['party_id'],expectedKind]);
+      if(originals.isEmpty) continue;
+      final original=originals.first;
+      final linked=db.select('''SELECT
+        (SELECT COALESCE(SUM(amount_minor),0) FROM debt_allocations WHERE document_id=?) +
+        (SELECT COALESCE(SUM(amount_minor),0) FROM debt_allocation_lines WHERE document_id=?) AS total
+        ''',[originalId,originalId]).first['total'] as int;
+      final previouslyApplied=db.select('''SELECT COALESCE(SUM(amount_minor),0) AS total
+        FROM debt_credit_allocations WHERE document_id=?''',[originalId]).first['total'] as int;
+      final due=(original['total_minor'] as int)-(original['paid_minor'] as int)-linked-previouslyApplied;
+      final returnTotal=row['total_minor'] as int;
+      final applied=due>0?(returnTotal<due?returnTotal:due):0;
+      if(applied>0) {
+        db.execute('''INSERT INTO debt_credit_allocations(
+          id,credit_document_id,document_id,branch_id,party_id,party_type,
+          amount_minor,reason,created_by,created_at)
+          VALUES(?,?,?,?,?,?,?,'v14 migration: preserve original invoice credit',?,?)''',
+          ['v14-'+(row['id'] as String),row['id'],originalId,row['branch_id'],
+            row['party_id'],row['kind']=='sale_return'?'customer':'supplier',
+            applied,row['created_by'],row['created_at']]);
+      }
+    }
+  }
 
   factory DatabaseStore.open(String filePath) {
     final file = File(filePath);
@@ -20,7 +63,7 @@ class DatabaseStore {
         final ver = db.select('SELECT MAX(version) AS version FROM schema_version').first['version'] as int? ?? 0;
         // Never downgrade/migrate a database created by newer application code.
         // A silent open could corrupt future schema or financial records.
-        if (ver > 13) throw StateError('Database schema $ver is newer than supported schema 13');
+        if (ver > 14) throw StateError('Database schema $ver is newer than supported schema 14');
         if (ver < 1) {
           for (final stmt in schemaV1) { db.execute(stmt); }
           db.execute('INSERT INTO schema_version(version) VALUES(1)');
@@ -73,6 +116,11 @@ class DatabaseStore {
           for (final stmt in schemaV13) { db.execute(stmt); }
           db.execute('INSERT INTO schema_version(version) VALUES(13)');
         }
+        if (ver < 14) {
+          for (final stmt in schemaV14) { db.execute(stmt); }
+          _backfillLegacyCreditNotes(db);
+          db.execute('INSERT INTO schema_version(version) VALUES(14)');
+        }
         db.execute('COMMIT');
       } catch (_) {
         db.execute('ROLLBACK');
@@ -101,6 +149,7 @@ class DatabaseStore {
     for (final stmt in schemaV11) { db.execute(stmt); }
     for (final stmt in schemaV12) { db.execute(stmt); }
     for (final stmt in schemaV13) { db.execute(stmt); }
+    for (final stmt in schemaV14) { db.execute(stmt); }
     return DatabaseStore._(db);
   }
 

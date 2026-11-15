@@ -128,6 +128,62 @@ void main(){
     }finally{store.dispose();}
   });
 
+  test('purchasing employee has own supplier cash till without cash access to others',(){
+    final store=DatabaseStore.memory();
+    try {
+      final engine=PosEngine(store);
+      final boot=engine.bootstrap('توريد نقدي','الرئيسي','owner',
+        'very-safe-password-123');
+      final branch=boot['branch_id'] as String;
+      final owner=Principal(boot['user_id'] as String,
+        boot['tenant_id'] as String,branch,'owner','owner');
+      var seq=0;
+      Map<String,Object?> cmd(Principal p,String action,Map<String,dynamic> body)=>
+        engine.command(p,action,body,'purchasing-drawer-${seq++}-unique');
+      final drawer=cmd(owner,'cash_drawer_create',{
+        'branch_id':branch,'name':'درج مشتريات'});
+      final otherDrawer=cmd(owner,'cash_drawer_create',{
+        'branch_id':branch,'name':'درج المالك'});
+      final u=cmd(owner,'create_user',{'branch_id':branch,
+        'username':'buyer','password':'buyer-long-password-123',
+        'role':'purchasing'});
+      final purchaser=Principal(u['id'] as String,owner.tenantId,
+        branch,'purchasing','buyer');
+      final product=cmd(owner,'create_product',{
+        'sku':'BUYER-DRAWER','name_ar':'بضاعة','sell_price_minor':300});
+      final supplier=cmd(owner,'create_supplier',{'name':'مورد'});
+      final paidPurchase=<String,dynamic>{'branch_id':branch,
+        'supplier_id':supplier['id'],
+        'lines':[{'product_id':product['id'],'qty_milli':1000,
+          'unit_cost_minor':100}],
+        'payments':[{'method':'cash','amount_minor':100}]};
+      expect(()=>cmd(purchaser,'purchase',paidPurchase),
+        throwsA(isA<DomainError>().having((e)=>e.status,'status',409)));
+      final s=cmd(purchaser,'shift_open',{
+        'branch_id':branch,'cash_drawer_id':drawer['id'],
+        'opening_minor':1000});
+      final ownerShift=cmd(owner,'shift_open',{
+        'branch_id':branch,'cash_drawer_id':otherDrawer['id'],
+        'opening_minor':2000});
+      final purchase=cmd(purchaser,'purchase',paidPurchase);
+      expect(purchase['total_minor'],100);
+      final links=store.rows('SELECT shift_id,cash_delta_minor FROM cash_shift_journal_links');
+      expect(links,hasLength(1));
+      expect(links.single['shift_id'],s['id']);
+      expect(links.single['cash_delta_minor'],-100);
+      expect(engine.listShifts(purchaser,branch),hasLength(1));
+      expect(()=>cmd(purchaser,'shift_close',{
+        'branch_id':branch,'shift_id':ownerShift['id'],
+        'closing_actual_minor':2000}),
+        throwsA(isA<DomainError>().having((e)=>e.status,'status',403)));
+      final closed=cmd(purchaser,'shift_close',{
+        'branch_id':branch,'shift_id':s['id'],
+        'closing_actual_minor':900});
+      expect(closed['expected_minor'],900);
+      expect(closed['difference_minor'],0);
+    }finally{store.dispose();}
+  });
+
   test('other-operator drawer closure needs supervisor reason and no guessed cash',(){
     final store=DatabaseStore.memory();
     try {

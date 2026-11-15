@@ -185,8 +185,9 @@ void main() {
       final response=await send('POST','/api/v1/$path',body:body,
         headers:{...headers,
           'idempotency-key':'debt-statement-test-${count++}-12345678901234'});
-      expect(response.statusCode,201,reason:await response.readAsString());
-      return Map<String,dynamic>.from(jsonDecode(await response.readAsString()) as Map);
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
     }
     final supplier=await post('suppliers',{'name':'مورد الكشف'});
     final newBranch=await post('branches',{'name':'فرع اختبار','code':'BR58'});

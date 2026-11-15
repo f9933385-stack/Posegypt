@@ -456,3 +456,28 @@ const schemaV13 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_debt_reconciliation_lines_request
     ON debt_reconciliation_lines(reconciliation_id)'''
 ];
+
+
+/// V14: auditable applications of credit notes (customer/supplier returns)
+/// to invoices. The original return journal remains untouched; allocation
+/// rows only explain how an existing AR/AP credit is consumed.
+const schemaV14 = <String>[
+  '''CREATE TABLE IF NOT EXISTS debt_credit_allocations (
+    id TEXT PRIMARY KEY,
+    credit_document_id TEXT NOT NULL REFERENCES documents(id),
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    party_id TEXT NOT NULL,
+    party_type TEXT NOT NULL CHECK(party_type IN ('customer','supplier')),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    reason TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_credit_allocations_invoice
+    ON debt_credit_allocations(document_id,created_at)''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_credit_allocations_source
+    ON debt_credit_allocations(credit_document_id,created_at)''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_credit_allocations_party
+    ON debt_credit_allocations(branch_id,party_id,party_type,created_at)'''
+];

@@ -374,6 +374,54 @@ def audit(db_file: str) -> dict:
                 AND NOT EXISTS(SELECT 1 FROM cash_shift_journal_links l
                   WHERE l.journal_entry_id=e.id)
             """)
+        has_transfers = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='cash_drawer_transfers'
+        """).fetchone() is not None
+        if has_transfers:
+            check("cash_drawer_transfer_integrity", """
+              SELECT t.id,t.branch_id,t.status FROM cash_drawer_transfers t
+              LEFT JOIN cash_shifts src ON src.id=t.source_shift_id
+              LEFT JOIN cash_shifts dst ON dst.id=t.destination_shift_id
+              LEFT JOIN cash_drawers sd ON sd.id=src.drawer_id
+              LEFT JOIN cash_drawers dd ON dd.id=dst.drawer_id
+              LEFT JOIN branches b ON b.id=t.branch_id
+              LEFT JOIN users maker ON maker.id=t.requested_by
+              LEFT JOIN users reviewer ON reviewer.id=t.reviewed_by
+              WHERE src.id IS NULL OR dst.id IS NULL
+                 OR sd.id IS NULL OR dd.id IS NULL OR b.id IS NULL
+                 OR src.branch_id<>t.branch_id
+                 OR dst.branch_id<>t.branch_id
+                 OR sd.branch_id<>t.branch_id
+                 OR dd.branch_id<>t.branch_id
+                 OR src.drawer_id=dst.drawer_id
+                 OR src.user_id=dst.user_id
+                 OR maker.id IS NULL OR maker.id<>src.user_id
+                 OR maker.tenant_id<>b.tenant_id
+                 OR length(trim(t.reason))<12
+                 OR t.amount_minor<=0
+                 OR t.requested_at<src.opened_at
+                 OR t.requested_at<dst.opened_at
+                 OR (t.status='pending' AND (
+                   t.reviewed_by IS NOT NULL OR t.reviewed_at IS NOT NULL
+                   OR t.review_reason IS NOT NULL
+                   OR src.closed_at IS NOT NULL
+                   OR dst.closed_at IS NOT NULL))
+                 OR (t.status<>'pending' AND (
+                   reviewer.id IS NULL OR t.reviewed_at IS NULL
+                   OR t.review_reason IS NULL
+                   OR length(trim(t.review_reason))<12
+                   OR t.reviewed_at<t.requested_at))
+                 OR (t.status IN ('approved','rejected')
+                   AND reviewer.id<>dst.user_id)
+                 OR (t.status='cancelled' AND reviewer.id<>src.user_id)
+                 OR (t.status='approved' AND (
+                   t.reviewed_at<src.opened_at OR t.reviewed_at<dst.opened_at
+                   OR (src.closed_at IS NOT NULL
+                     AND t.reviewed_at>src.closed_at)
+                   OR (dst.closed_at IS NOT NULL
+                     AND t.reviewed_at>dst.closed_at)))
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

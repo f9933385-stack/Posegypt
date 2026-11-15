@@ -316,3 +316,38 @@ bank/cashier documentation. This is a conservative, manual workflow and
 does not support split approvals by one employee, chargebacks,
 overpayment credit settlement, or cross-host reconciliation.
 See [Arabic workflow](LEGACY_DEBT_RECONCILIATION_AR.md).
+
+
+## Applying existing customer/supplier return credits (schema v14)
+
+A credit-refund return note is an existing AR/AP credit, not cash.
+The original return automatically applies up to the amount still due
+on its original invoice. Any excess remains as a visible available
+credit note and can be applied to another posted invoice for the
+**same party and branch**.
+
+`GET /api/v1/debts/invoices?branch_id=...&party_id=...&party_type=customer|supplier`
+now also returns:
+- `available_credit_minor`: total unused credit-note value for this party/branch.
+- `credit_notes[]`: source return ID, return number/date, original invoice
+  number, total and `available_minor`.
+
+`POST /api/v1/debts/credits/apply` (owner/manager only) accepts
+`branch_id`, `party_type`, `party_id`, `credit_document_id`,
+`invoice_id`, `amount_minor`, and a required 12–1000 character
+`reason`. The amount must fit both the source note's remaining value
+and the target invoice's current outstanding balance. Both documents
+must be posted, same-tenant, same-branch, same-party and of the correct
+customer/supplier types. Cash-refund notes cannot be used.
+
+Applying a credit note writes one `debt_credit_allocations` row and
+an audit/outbox event only. It does **not** create a payment row,
+cash movement, journal entry, VAT event, or profit change. The
+existing return journal already posted the AR/AP credit. Idempotency
+keys prevent accidental duplicate allocation on retry.
+
+Schema v14 migrates historical credit returns additively. It
+materializes the portion that previously reduced the original invoice
+as an explicit allocation; the excess is retained as an available
+credit note. Original documents, payment rows and journals are not
+rewritten. See [Arabic operator guide](RETURN_CREDIT_APPLICATION_AR.md).

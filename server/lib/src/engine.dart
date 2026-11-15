@@ -187,6 +187,11 @@ class PosEngine {
       case 'cash_transfer_approve': return _reviewCashTransfer(p,input,'approved');
       case 'cash_transfer_reject': return _reviewCashTransfer(p,input,'rejected');
       case 'cash_transfer_cancel': return _reviewCashTransfer(p,input,'cancelled');
+      case 'cash_safe_create': return _createCashSafe(p,input);
+      case 'cash_safe_drop_request': return _requestCashSafeDrop(p,input);
+      case 'cash_safe_drop_approve': return _reviewCashSafeDrop(p,input,'approved');
+      case 'cash_safe_drop_reject': return _reviewCashSafeDrop(p,input,'rejected');
+      case 'cash_safe_drop_cancel': return _reviewCashSafeDrop(p,input,'cancelled');
       default: throw DomainError('Unknown command',404);
     }
   }
@@ -1911,7 +1916,11 @@ class PosEngine {
       FROM cash_drawer_transfers
       WHERE source_shift_id=? AND status='approved' ''',
       [shiftId])!['total'] as int;
-    return journal+received-sent;
+    final safeDrops=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM cash_safe_drops
+      WHERE source_shift_id=? AND status='approved' ''',
+      [shiftId])!['total'] as int;
+    return journal+received-sent-safeDrops;
   }
 
   Map<String,Object?> _openDrawerShift(String branch,String shiftId) {
@@ -2059,6 +2068,146 @@ class PosEngine {
     return all;
   }
 
+  Map<String,Object?> _cashSafe(String branch) {
+    final safe=store.first('''SELECT * FROM cash_safes WHERE branch_id=?''',[branch]);
+    if(safe==null) throw DomainError('Branch safe has not been registered',404);
+    return safe;
+  }
+
+  int _safeBalance(String safeId) {
+    return store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM cash_safe_drops WHERE safe_id=? AND status='approved' ''',
+      [safeId])!['total'] as int;
+  }
+
+  Map<String,Object?> _createCashSafe(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,input['branch_id']);
+    final name=nonEmpty(input['name'],'name').trim();
+    if(name.length>60) throw DomainError('Safe name must be 1..60 characters');
+    if(store.first('''SELECT id FROM cash_drawers
+      WHERE branch_id=? LIMIT 1''',[branch])==null) {
+      throw DomainError('Activate independent cash drawers first',409);
+    }
+    if(store.first('SELECT id FROM cash_safes WHERE branch_id=?',[branch])!=null) {
+      throw DomainError('A branch cash safe already exists',409);
+    }
+    final id=_id(),time=_now();
+    store.exec('''INSERT INTO cash_safes
+      (id,branch_id,name,created_by,created_at) VALUES(?,?,?,?,?)''',
+      [id,branch,name,p.id,time]);
+    _audit(p,'cash_safe.created',id,{'name':name,'initial_minor':0},branch);
+    _outbox(branch,'cash_safe',{'id':id,'name':name});
+    return {'id':id,'branch_id':branch,'name':name,'balance_minor':0};
+  }
+
+  Map<String,Object?> readCashSafe(Principal p,String branchId) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final branch=_branch(p,branchId);
+    final safe=_cashSafe(branch);
+    return {...safe,'balance_minor':_safeBalance(safe['id'] as String)};
+  }
+
+  List<Map<String,Object?>> listCashSafeDrops(Principal p,String branchId) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final branch=_branch(p,branchId);
+    final rows=store.rows('''SELECT d.id,d.safe_id,d.branch_id,
+      d.source_shift_id,d.amount_minor,d.reason,d.status,
+      d.requested_by,d.reviewed_by,d.requested_at,d.reviewed_at,
+      d.review_reason,drawer.name AS drawer_name,
+      cashier.username AS sender_name
+      FROM cash_safe_drops d
+      JOIN cash_shifts shift ON shift.id=d.source_shift_id
+      JOIN cash_drawers drawer ON drawer.id=shift.drawer_id
+      JOIN users cashier ON cashier.id=d.requested_by
+      WHERE d.branch_id=?
+      ORDER BY d.requested_at DESC,d.id DESC LIMIT 200''',[branch]);
+    if(p.role=='cashier' || p.role=='purchasing') {
+      rows.removeWhere((row)=>row['requested_by']!=p.id);
+    }
+    return rows;
+  }
+
+  Map<String,Object?> _requestCashSafeDrop(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final branch=_branch(p,input['branch_id']);
+    final safe=_cashSafe(branch);
+    final shiftId=nonEmpty(input['source_shift_id'],'source_shift_id');
+    final shift=_openDrawerShift(branch,shiftId);
+    if(shift['user_id']!=p.id) {
+      throw DomainError('Only the drawer operator may request a safe drop',403);
+    }
+    final amount=strictInt(input['amount_minor'],'amount_minor',min:1);
+    if(amount>1000000000) throw DomainError('Safe drop exceeds allowed amount',409);
+    final reason=_cashTransferReason(input['reason'],'reason');
+    if(amount>_drawerExpected(shift)) {
+      throw DomainError('Safe drop exceeds available drawer cash',409);
+    }
+    final pending=store.first('''SELECT COUNT(*) AS n FROM cash_safe_drops
+      WHERE source_shift_id=? AND status='pending' ''',[shiftId])!['n'] as int;
+    if(pending>=20) throw DomainError('Too many pending safe drops',409);
+    final id=_id(),at=_now();
+    store.exec('''INSERT INTO cash_safe_drops(
+      id,safe_id,branch_id,source_shift_id,amount_minor,reason,status,
+      requested_by,requested_at)
+      VALUES(?,?,?,?,?,?,'pending',?,?)''',
+      [id,safe['id'],branch,shiftId,amount,reason,p.id,at]);
+    _audit(p,'cash_safe_drop.request',id,{'safe_id':safe['id'],
+      'source_shift_id':shiftId,'amount_minor':amount,'reason':reason},branch);
+    _outbox(branch,'cash_safe_drop',{'id':id,'status':'pending',
+      'source_shift_id':shiftId});
+    return {'id':id,'safe_id':safe['id'],'status':'pending',
+      'source_shift_id':shiftId,'amount_minor':amount};
+  }
+
+  Map<String,Object?> _reviewCashSafeDrop(
+      Principal p,Map<String,dynamic> input,String decision) {
+    _allow(p,decision=='cancelled'
+      ? ['owner','manager','cashier','purchasing']:['owner','manager']);
+    final id=nonEmpty(input['drop_id'],'drop_id');
+    final drop=store.first('''SELECT * FROM cash_safe_drops WHERE id=?''',[id]);
+    if(drop==null) throw DomainError('Cash safe drop not found',404);
+    final branch=_branch(p,drop['branch_id']);
+    if(drop['status']!='pending') throw DomainError('Safe drop already reviewed',409);
+    if(decision=='cancelled') {
+      if(drop['requested_by']!=p.id) {
+        throw DomainError('Only the sender can cancel the safe drop',403);
+      }
+    }else if(drop['requested_by']==p.id) {
+      throw DomainError('A different manager must review the safe drop',403);
+    }
+    final reason=_cashTransferReason(input['reason'],'review_reason');
+    final safe=_cashSafe(branch);
+    if(drop['safe_id']!=safe['id']) {
+      throw DomainError('Safe does not match original branch',409);
+    }
+    if(decision=='approved') {
+      final shift=_openDrawerShift(branch,drop['source_shift_id'] as String);
+      if(shift['user_id']!=drop['requested_by']) {
+        throw DomainError('Safe drop operator no longer matches',409);
+      }
+      if((drop['amount_minor'] as int)>_drawerExpected(shift)) {
+        throw DomainError('Safe drop exceeds current available drawer cash',409);
+      }
+    }
+    final at=_now();
+    store.exec('''UPDATE cash_safe_drops
+      SET status=?,reviewed_by=?,reviewed_at=?,review_reason=?
+      WHERE id=? AND status='pending' ''',[decision,p.id,at,reason,id]);
+    _audit(p,'cash_safe_drop.$decision',id,{
+      'safe_id':safe['id'],'source_shift_id':drop['source_shift_id'],
+      'amount_minor':drop['amount_minor'],'reason':reason},branch);
+    _outbox(branch,'cash_safe_drop',{'id':id,'status':decision,
+      'source_shift_id':drop['source_shift_id']});
+    return {'id':id,'status':decision,
+      'amount_minor':drop['amount_minor'],'safe_id':safe['id'],
+      if(decision=='approved')
+        'safe_balance_minor':_safeBalance(safe['id'] as String),
+      if(decision=='approved')
+        'sender_expected_minor':_drawerExpected(
+          _openDrawerShift(branch,drop['source_shift_id'] as String))};
+  }
+
   Map<String,Object?> _shiftClose(Principal p,Map<String,dynamic> input) {
     _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,input['branch_id']);
@@ -2086,6 +2235,12 @@ class PosEngine {
           AND (source_shift_id=? OR destination_shift_id=?)
         LIMIT 1''',[id,id])!=null) {
       throw DomainError('Review or cancel pending cash transfers before closing shift',409);
+    }
+    if(shift['drawer_id']!=null &&
+      store.first('''SELECT id FROM cash_safe_drops
+        WHERE status='pending' AND source_shift_id=?
+        LIMIT 1''',[id])!=null) {
+      throw DomainError('Review or cancel pending safe drops before closing shift',409);
     }
     final actual=strictInt(input['closing_actual_minor'],'closing_actual_minor');
     final expected=(shift['opening_minor'] as int)+

@@ -540,6 +540,90 @@ void main() {
     expect(rows.single['user_id'],user['id']);
   });
 
+  test('HTTP transfer moves an existing till float only after recipient acknowledgement',() async {
+    final admin=await token();
+    var seq=0;
+    Future<Map<String,dynamic>> post(String path,String bearer,
+        Map<String,dynamic> body,{String? idempotency}) async {
+      final response=await send('POST','/api/v1/$path',body:body,
+        headers:{'authorization':'Bearer $bearer',
+          'idempotency-key':idempotency??'drawer-handover-http-${seq++}-key'});
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+    final drawer1=await post('shifts/drawers',admin,{
+      'branch_id':setup['branch_id'],'name':'درج أول'});
+    final drawer2=await post('shifts/drawers',admin,{
+      'branch_id':setup['branch_id'],'name':'درج ثاني'});
+    final operatorA=await post('users',admin,{
+      'branch_id':setup['branch_id'],'username':'handover-sender',
+      'password':'handover-password-123456','role':'cashier'});
+    final operatorB=await post('users',admin,{
+      'branch_id':setup['branch_id'],'username':'handover-receiver',
+      'password':'handover-password-123456','role':'cashier'});
+    Future<String> login(String name) async {
+      final r=await send('POST','/api/v1/auth/login',body:{
+        'tenant_id':setup['tenant_id'],'username':name,
+        'password':'handover-password-123456'});
+      expect(r.statusCode,200);
+      return (jsonDecode(await r.readAsString()) as Map)['token'] as String;
+    }
+    final sender=await login('handover-sender');
+    final receiver=await login('handover-receiver');
+    final first=await post('shifts/open',sender,{
+      'branch_id':setup['branch_id'],
+      'cash_drawer_id':drawer1['id'],'opening_minor':1000});
+    final second=await post('shifts/open',receiver,{
+      'branch_id':setup['branch_id'],
+      'cash_drawer_id':drawer2['id'],'opening_minor':200});
+    final journalBefore=store.rows('SELECT id FROM journal_entries').length;
+    final request=<String,dynamic>{
+      'branch_id':setup['branch_id'],'source_shift_id':first['id'],
+      'destination_shift_id':second['id'],'amount_minor':150,
+      'reason':'محضر تسليم عهدة نقدية بين الكاشيرين'};
+    const replay='http-cash-transfer-idempotent-1234567';
+    final pending=await post('shifts/transfers',sender,request,
+      idempotency:replay);
+    expect(await post('shifts/transfers',sender,request,idempotency:replay),pending);
+    expect(pending['status'],'pending');
+    final url='/api/v1/shifts/transfers?branch_id=${setup['branch_id']}';
+    final myList=await send('GET',url,
+      headers:{'authorization':'Bearer $sender'});
+    expect(myList.statusCode,200);
+    expect((jsonDecode(await myList.readAsString()) as List).single['id'],
+      pending['id']);
+    final premature=await send('POST','/api/v1/shifts/transfers/approve',
+      body:{'transfer_id':pending['id'],
+        'reason':'محاولة اعتماد المرسل لعملية تخصه'},
+      headers:{'authorization':'Bearer $sender',
+        'idempotency-key':'self-approve-transfer-key-123456'});
+    expect(premature.statusCode,403);
+    final ownerApproval=await send('POST','/api/v1/shifts/transfers/approve',
+      body:{'transfer_id':pending['id'],
+        'reason':'مالك الفرع يحاول الاعتماد دون استلام'},
+      headers:{'authorization':'Bearer $admin',
+        'idempotency-key':'owner-approve-transfer-key-123456'});
+    expect(ownerApproval.statusCode,403);
+    final accepted=await post('shifts/transfers/approve',receiver,{
+      'transfer_id':pending['id'],
+      'reason':'تم استلام كامل النقدية وعدها فعليًا'});
+    expect(accepted['status'],'approved');
+    expect(accepted['sender_expected_minor'],850);
+    expect(accepted['receiver_expected_minor'],350);
+    expect(store.rows('SELECT id FROM journal_entries'),hasLength(journalBefore));
+    expect(store.rows('SELECT id FROM cash_drawer_transfers'),hasLength(1));
+    final closedA=await post('shifts/close',sender,{
+      'branch_id':setup['branch_id'],'shift_id':first['id'],
+      'closing_actual_minor':850});
+    final closedB=await post('shifts/close',receiver,{
+      'branch_id':setup['branch_id'],'shift_id':second['id'],
+      'closing_actual_minor':350});
+    expect(closedA['difference_minor'],0);
+    expect(closedB['difference_minor'],0);
+    expect(operatorA['id'],isNot(operatorB['id']));
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

@@ -196,7 +196,7 @@ class _DebtsState extends State<DebtsPage> {
                 }catch(e){update(()=>validationError=e.toString());}
               },child:const Text('تطبيق الرصيد')),
             ],
-          )),
+          ))));
       if(request==null || !mounted)return;
       setState(()=>saving=true);
       try {

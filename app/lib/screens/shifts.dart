@@ -17,7 +17,8 @@ class ShiftsPage extends StatefulWidget {
 }
 
 class _ShiftsPageState extends State<ShiftsPage> {
-  final counted=TextEditingController();
+  final openingCount=TextEditingController();
+  final closingCount=TextEditingController();
   late Future<List<Map<String,dynamic>>> shifts;
   late Future<List<Map<String,dynamic>>> drawers;
   String? selectedDrawer;
@@ -25,7 +26,11 @@ class _ShiftsPageState extends State<ShiftsPage> {
   bool get manager=>widget.role=='owner'||widget.role=='manager';
 
   @override void initState(){super.initState();_reload();}
-  @override void dispose(){counted.dispose();super.dispose();}
+  @override void dispose(){
+    openingCount.dispose();
+    closingCount.dispose();
+    super.dispose();
+  }
 
   void _reload()=>setState((){
     shifts=widget.api.list('shifts',{'branch_id':widget.branchId});
@@ -68,7 +73,7 @@ class _ShiftsPageState extends State<ShiftsPage> {
     if(busy)return;
     setState(()=>busy=true);
     try {
-      final amount=parseMoney(counted.text);
+      final amount=parseMoney(close?closingCount.text:openingCount.text);
       final result=await widget.api.post(close?'shifts/close':'shifts/open',{
         'branch_id':widget.branchId,
         if(close) 'shift_id':id,
@@ -77,7 +82,7 @@ class _ShiftsPageState extends State<ShiftsPage> {
         (close?'closing_actual_minor':'opening_minor'):amount,
       });
       if(!mounted)return;
-      counted.clear();
+      if(close){closingCount.clear();}else{openingCount.clear();}
       if(close) {
         alert(context,'تم الإغلاق. المتوقع ${money(asInt(result['expected_minor']))}'
           ' — الفرق ${money(asInt(result['difference_minor']))}');
@@ -166,9 +171,9 @@ class _ShiftsPageState extends State<ShiftsPage> {
                     onChanged:(value)=>setState(()=>selectedDrawer=value)),
                   if(canOpen) ...[
                     const SizedBox(height:12),
-                    TextField(controller:counted,keyboardType:TextInputType.number,
+                    TextField(controller:openingCount,keyboardType:TextInputType.number,
                       decoration:const InputDecoration(
-                        labelText:'النقدية الافتتاحية أو الفعلية بالجنيه')),
+                        labelText:'النقدية الافتتاحية بالجنيه')),
                     const SizedBox(height:14),
                     FilledButton.icon(
                       onPressed:busy?null:()=>_submit(close:false,drawerId:chosen),
@@ -179,10 +184,10 @@ class _ShiftsPageState extends State<ShiftsPage> {
                   else const Text('لا يوجد درج شاغر أو توجد وردية مفتوحة مشتركة.'),
                   if(active.isNotEmpty) ...[
                     const SizedBox(height:12),
-                    if(!canOpen) TextField(controller:counted,
+                    TextField(controller:closingCount,
                       keyboardType:TextInputType.number,
                       decoration:const InputDecoration(
-                        labelText:'النقدية الفعلية بعد العد بالجنيه')),
+                        labelText:'النقدية الفعلية بعد عدّ الدرج الذي ستغلقه')),
                     for(final shift in active) ListTile(
                       title:Text(shift['drawer_name']?.toString()??'خزينة الفرع'),
                       subtitle:Text('${shift['operator_name']} — ${shift['opened_at']}'),

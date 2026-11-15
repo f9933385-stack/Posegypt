@@ -319,6 +319,91 @@ void main() {
     expect(store.rows('SELECT * FROM debt_allocation_lines'),hasLength(2));
   });
 
+  test('HTTP legacy reconciliation requires independent approval and posts no second cash',() async {
+    final admin=await token();
+    var sequence=0;
+    Future<Map<String,dynamic>> post(String route,String bearer,
+        Map<String,dynamic> body,{String? idempotency}) async {
+      final reply=await send('POST','/api/v1/$route',body:body,
+        headers:{'authorization':'Bearer $bearer','idempotency-key':
+          idempotency ?? 'http-legacy-reconcile-${sequence++}-idempotent-key'});
+      final text=await reply.readAsString();
+      expect(reply.statusCode,201,reason:text);
+      return Map<String,dynamic>.from(jsonDecode(text) as Map);
+    }
+    final supplier=await post('suppliers',admin,{'name':'مورد التحصيل القديم'});
+    final product=await post('products',admin,{
+      'sku':'HTTP-OLD-MATCH','name_ar':'برغل','sell_price_minor':300});
+    final purchase=await post('purchases',admin,{
+      'branch_id':setup['branch_id'],'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,
+        'unit_cost_minor':600}],'payments':<Map<String,dynamic>>[]});
+    final original=await post('suppliers/payments',admin,{
+      'branch_id':setup['branch_id'],'supplier_id':supplier['id'],
+      'method':'cash','amount_minor':250});
+    final managerUser=await post('users',admin,{
+      'branch_id':setup['branch_id'],'username':'review-api-manager',
+      'password':'strong-review-api-password-123','role':'manager'});
+    expect(managerUser['role'],'manager');
+    final login=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],
+      'username':'review-api-manager',
+      'password':'strong-review-api-password-123'});
+    expect(login.statusCode,200);
+    final manager=(jsonDecode(await login.readAsString()) as Map)['token'] as String;
+    final query='/api/v1/debts/unallocated?branch_id=${setup['branch_id']}'
+      '&party_type=supplier&party_id=${supplier['id']}';
+    final initial=await send('GET',query,
+      headers:{'authorization':'Bearer $admin'});
+    expect(initial.statusCode,200);
+    expect(jsonDecode(await initial.readAsString()),hasLength(1));
+    const repeatKey='historical-review-http-request-retry-123456';
+    final requestData=<String,dynamic>{
+      'branch_id':setup['branch_id'],'party_id':supplier['id'],
+      'party_type':'supplier','payment_id':original['id'],
+      'reason':'كشوفات البنك وسند توريد المخزون موثقة',
+      'allocations':[{'invoice_id':purchase['id'],'amount_minor':250}]
+    };
+    final proposed=await post('debts/reconciliations',admin,requestData,
+      idempotency:repeatKey);
+    expect(await post('debts/reconciliations',admin,requestData,
+      idempotency:repeatKey),proposed);
+    expect(proposed['status'],'pending');
+    final beforeJournal=store.rows('SELECT id FROM journal_entries').length;
+    final requesterApproves=await send('POST',
+      '/api/v1/debts/reconciliations/approve',body:{
+        'reconciliation_id':proposed['id'],
+        'reason':'محاولة اعتماد الطلب بمعرف صاحبه'},
+      headers:{'authorization':'Bearer $admin',
+        'idempotency-key':'http-self-approval-123456789'});
+    expect(requesterApproves.statusCode,403);
+    final approved=await post('debts/reconciliations/approve',
+      manager,{'reconciliation_id':proposed['id'],
+        'reason':'تمت المراجعة المستقلة للمستندات الأصلية'});
+    expect(approved['status'],'approved');
+    expect(store.rows('SELECT id FROM journal_entries'),hasLength(beforeJournal));
+    expect(store.rows('SELECT id FROM debt_allocation_lines'),hasLength(1));
+    final remaining=await send('GET',query,
+      headers:{'authorization':'Bearer $admin'});
+    expect(jsonDecode(await remaining.readAsString()),isEmpty);
+    final report=await send('GET',
+      '/api/v1/debts/invoices?branch_id=${setup['branch_id']}'
+      '&party_type=supplier&party_id=${supplier['id']}',
+      headers:{'authorization':'Bearer $admin'});
+    expect(report.statusCode,200);
+    final snapshot=jsonDecode(await report.readAsString()) as Map;
+    expect(snapshot['balance_minor'],350);
+    expect(snapshot['allocation_available'],true);
+    expect((snapshot['invoices'] as List).single['remaining_minor'],350);
+    final reviewList=await send('GET',
+      '/api/v1/debts/reconciliations?branch_id=${setup['branch_id']}'
+      '&party_type=supplier&party_id=${supplier['id']}',
+      headers:{'authorization':'Bearer $manager'});
+    expect(reviewList.statusCode,200);
+    expect((jsonDecode(await reviewList.readAsString()) as List).single['status'],
+      'approved');
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

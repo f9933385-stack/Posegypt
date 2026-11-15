@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api.dart';
 import '../models/formats.dart';
 import '../widgets/common.dart';
+import 'cash_transfers.dart';
 
 /// A branch can operate legacy one-shift mode or opt into independently
 /// attributed drawers. Cash entries are assigned by the server to the
@@ -212,5 +213,7 @@ class _ShiftsPageState extends State<ShiftsPage> {
               if(all.isEmpty)const EmptyState('لا توجد ورديات مسجلة'),
             ]);
           })),
+        CashTransfersSection(api:widget.api,branchId:widget.branchId,
+          role:widget.role,userId:widget.userId,onChanged:_reload),
       ]));
 }

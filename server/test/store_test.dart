@@ -17,11 +17,11 @@ void main() {
 
   test('initial migration and reopen are idempotent', () {
     final first=DatabaseStore.open(path);
-    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 16);
+    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 17);
     expect(first.first("SELECT name FROM sqlite_master WHERE name='products'")?['name'], 'products');
     first.dispose();
     final second=DatabaseStore.open(path);
-    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 16);
+    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 17);
     second.dispose();
   });
 
@@ -39,7 +39,7 @@ void main() {
     }
     final migrated=DatabaseStore.open(path);
     try {
-      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(migrated.first("SELECT name_ar FROM products WHERE id='P'")?['name_ar'],'Old Product');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='product_units'")?['name'],
         'product_units');
@@ -102,7 +102,7 @@ void main() {
     } finally {raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(upgraded.first("SELECT amount_minor FROM debt_allocations WHERE id='ALLOC'")?['amount_minor'],100);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],100);
       expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_allocation_lines'")?['name'],
@@ -161,7 +161,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],300);
       expect(upgraded.first("SELECT COUNT(*) AS n FROM debt_allocation_lines WHERE payment_id='PAY'")?['n'],2);
       expect(upgraded.first("SELECT SUM(amount_minor) AS total FROM debt_allocation_lines WHERE payment_id='PAY'")?['total'],300);
@@ -221,7 +221,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(upgraded.first("""SELECT amount_minor FROM debt_credit_allocations
         WHERE credit_document_id='RET1' AND document_id='SALE'""")?['amount_minor'],100);
       expect(upgraded.first("""SELECT COUNT(*) AS n FROM debt_credit_allocations
@@ -272,7 +272,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(upgraded.first("SELECT drawer_id FROM cash_shifts WHERE id='SHIFT'")?['drawer_id'],null);
       expect(upgraded.first("SELECT opening_minor FROM cash_shifts WHERE id='SHIFT'")?['opening_minor'],1000);
       expect(upgraded.first("SELECT SUM(debit_minor-credit_minor) AS n FROM journal_lines WHERE entry_id='J'")?['n'],0);
@@ -281,12 +281,12 @@ void main() {
     }finally{upgraded.dispose();}
     final again=DatabaseStore.open(path);
     try {
-      expect(again.first('SELECT COUNT(*) AS n FROM schema_version')?['n'],16);
+      expect(again.first('SELECT COUNT(*) AS n FROM schema_version')?['n'],17);
       expect(again.first("SELECT COUNT(*) AS n FROM cash_drawers")?['n'],0);
     }finally{again.dispose();}
   });
 
-  test('v15 independent drawer, linked cash journals and shift counts survive v16',(){
+  test('v15 independent drawer, linked cash journals and shift counts survive v16/v17',(){
     final raw=sqlite3.open(path);
     try {
       raw.execute('PRAGMA foreign_keys=ON');
@@ -322,7 +322,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],16);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
       expect(upgraded.first("SELECT COUNT(*) AS total FROM cash_drawers")?['total'],2);
       expect(upgraded.first("SELECT drawer_id FROM cash_shifts WHERE id='S1'")?['drawer_id'],'D1');
       expect(upgraded.first("SELECT drawer_id FROM cash_shifts WHERE id='S2'")?['drawer_id'],'D2');
@@ -333,8 +333,54 @@ void main() {
     }finally{upgraded.dispose();}
     final reopened=DatabaseStore.open(path);
     try {
-      expect(reopened.first("SELECT COUNT(*) AS n FROM schema_version")?['n'],16);
+      expect(reopened.first("SELECT COUNT(*) AS n FROM schema_version")?['n'],17);
       expect(reopened.first("SELECT COUNT(*) AS n FROM cash_drawer_transfers")?['n'],0);
+    }finally{reopened.dispose();}
+  });
+
+  test('v16 peer cash transfers and shifts survive v17 safe migration',(){
+    final db=sqlite3.open(path);
+    try{
+      db.execute('PRAGMA foreign_keys=ON');
+      for(final step in [
+        schemaV1,schemaV2,schemaV3,schemaV4,schemaV5,schemaV6,
+        schemaV7,schemaV8,schemaV9,schemaV10,schemaV11,schemaV12,
+        schemaV13,schemaV14,schemaV15,schemaV16
+      ]) {
+        for(final sql in step){db.execute(sql);}
+      }
+      db.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      for(var i=1;i<=16;i++) {
+        db.execute('INSERT INTO schema_version(version) VALUES(?)',[i]);
+      }
+      db.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Store','2026-01-01')");
+      db.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B','T','BR01','Main','2026-01-01')");
+      db.execute("INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at) VALUES('A','T','B','first','s','h','cashier','2026-01-01')");
+      db.execute("INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at) VALUES('C','T','B','second','s','h','cashier','2026-01-01')");
+      db.execute("INSERT INTO cash_drawers(id,branch_id,name,created_by,created_at) VALUES('D1','B','Drawer 1','A','2026-01-01')");
+      db.execute("INSERT INTO cash_drawers(id,branch_id,name,created_by,created_at) VALUES('D2','B','Drawer 2','C','2026-01-01')");
+      db.execute("INSERT INTO cash_shifts(id,branch_id,user_id,drawer_id,opening_minor,opened_at) VALUES('S1','B','A','D1',1000,'2026-01-01')");
+      db.execute("INSERT INTO cash_shifts(id,branch_id,user_id,drawer_id,opening_minor,opened_at) VALUES('S2','B','C','D2',200,'2026-01-01')");
+      db.execute("""INSERT INTO cash_drawer_transfers(id,branch_id,
+        source_shift_id,destination_shift_id,amount_minor,reason,status,
+        requested_by,reviewed_by,requested_at,reviewed_at,review_reason)
+        VALUES('TRANSFER','B','S1','S2',250,'recorded handover',
+          'approved','A','C','2026-01-02','2026-01-02',
+          'received by second operator')""");
+    }finally{db.dispose();}
+    final upgraded=DatabaseStore.open(path);
+    try{
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],17);
+      expect(upgraded.first("SELECT status FROM cash_drawer_transfers WHERE id='TRANSFER'")?['status'],'approved');
+      expect(upgraded.first("SELECT amount_minor FROM cash_drawer_transfers WHERE id='TRANSFER'")?['amount_minor'],250);
+      expect(upgraded.first("SELECT COUNT(*) AS n FROM cash_safes")?['n'],0);
+      expect(upgraded.first("SELECT COUNT(*) AS n FROM cash_safe_drops")?['n'],0);
+      expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
+    }finally{upgraded.dispose();}
+    final reopened=DatabaseStore.open(path);
+    try{
+      expect(reopened.first('SELECT COUNT(*) AS n FROM schema_version')?['n'],17);
+      expect(reopened.first("SELECT COUNT(*) AS n FROM cash_drawer_transfers")?['n'],1);
     }finally{reopened.dispose();}
   });
 

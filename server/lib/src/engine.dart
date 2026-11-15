@@ -781,6 +781,218 @@ class PosEngine {
         AND NOT EXISTS (SELECT 1 FROM debt_allocation_lines a WHERE a.payment_id=p.id)''',
       [branch,party,customer?'in':'out'])!['total'] as int);
 
+  /// A legacy payment is a real, already-journaled receipt with no invoice
+  /// link. Reconciliation may annotate it, but must NEVER re-post the cash.
+  Map<String,Object?> _legacyDebtPayment(String branch,String party,String id,
+      {required bool customer}) {
+    final direction=customer?'in':'out';
+    final payment=store.first('''SELECT p.* FROM payments p
+      WHERE p.id=? AND p.branch_id=? AND p.party_id=?
+        AND p.direction=? AND p.document_id IS NULL
+        AND NOT EXISTS(SELECT 1 FROM debt_allocations a WHERE a.payment_id=p.id)
+        AND NOT EXISTS(SELECT 1 FROM debt_allocation_lines a WHERE a.payment_id=p.id)''',
+      [id,branch,party,direction]);
+    if(payment==null) throw DomainError('Unallocated payment not found',404);
+    final amount=payment['amount_minor'] as int;
+    final account='${customer?'AR':'AP'}:$party';
+    final cashAccount=_payAccount(payment['method'] as String);
+    final journal=store.rows('''SELECT e.id,
+      SUM(l.debit_minor-l.credit_minor) AS difference,
+      SUM(CASE WHEN l.account=? THEN l.debit_minor-l.credit_minor ELSE 0 END)
+        AS debt_change,
+      SUM(CASE WHEN l.account=? THEN l.debit_minor-l.credit_minor ELSE 0 END)
+        AS tender_change
+      FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id
+      WHERE e.branch_id=? AND e.reference_type=? AND e.reference_id=?
+      GROUP BY e.id''',
+      [account,cashAccount,branch,direction,id]);
+    if(journal.length!=1 ||
+        journal.single['difference']!=0 ||
+        journal.single['debt_change']!=(customer?-amount:amount) ||
+        journal.single['tender_change']!=(customer?amount:-amount)) {
+      throw DomainError('Unallocated payment has no matching balanced journal',409);
+    }
+    return payment;
+  }
+
+  List<Map<String,Object?>> _checkedReconciliationLines(
+      Principal p,String branch,String party,Object? raw,
+      {required bool customer,required int paymentAmount}) {
+    if(raw is! List || raw.isEmpty || raw.length>20) {
+      throw DomainError('Expected 1..20 invoice allocations');
+    }
+    final used=<String>{};
+    final lines=<Map<String,Object?>>[];
+    var total=0;
+    for(final input in raw) {
+      if(input is! Map) throw DomainError('Invalid invoice allocation');
+      final docId=nonEmpty(input['invoice_id'],'invoice_id');
+      if(!used.add(docId)) {
+        throw DomainError('Invoice repeated in reconciliation',409);
+      }
+      final value=strictInt(input['amount_minor'],'amount_minor',min:1);
+      final invoice=_invoiceRemaining(p,branch,party,docId,customer:customer);
+      if(value>(invoice['remaining_minor'] as int)) {
+        throw DomainError('Reconciliation exceeds invoice balance',409);
+      }
+      total+=value;
+      if(total>paymentAmount) {
+        throw DomainError('Reconciliation exceeds original payment',409);
+      }
+      lines.add({'invoice_id':docId,'amount_minor':value,
+        'number':invoice['number']});
+    }
+    if(total!=paymentAmount) {
+      throw DomainError('Reconciliation must allocate the entire original payment',409);
+    }
+    return lines;
+  }
+
+  /// Owner/manager only. Lists actual unmatched, already-journaled payments.
+  /// Pending proposals have no effect on balances or invoice allocations.
+  List<Map<String,Object?>> listLegacyDebtPayments(Principal p,
+      String branchId,String partyId,{required bool customer}) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,branchId);
+    final party=nonEmpty(partyId,'party_id');
+    _party(customer?'customers':'suppliers',p,party);
+    return store.rows('''SELECT pay.id,pay.method,pay.amount_minor,
+      pay.reference,pay.created_at,
+      (SELECT r.id FROM debt_reconciliations r
+        WHERE r.payment_id=pay.id AND r.status='pending'
+        LIMIT 1) AS pending_request_id
+      FROM payments pay WHERE pay.branch_id=? AND pay.party_id=?
+        AND pay.document_id IS NULL AND pay.direction=?
+        AND NOT EXISTS(SELECT 1 FROM debt_allocations a WHERE a.payment_id=pay.id)
+        AND NOT EXISTS(SELECT 1 FROM debt_allocation_lines a WHERE a.payment_id=pay.id)
+      ORDER BY pay.created_at,pay.id LIMIT 200''',
+      [branch,party,customer?'in':'out']);
+  }
+
+  List<Map<String,Object?>> listDebtReconciliations(Principal p,
+      String branchId,String partyId,{required bool customer}) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,branchId);
+    final party=nonEmpty(partyId,'party_id');
+    _party(customer?'customers':'suppliers',p,party);
+    final requests=store.rows('''SELECT r.*,p.amount_minor,p.method,p.created_at
+      AS payment_created_at,u.username AS requester_name
+      FROM debt_reconciliations r
+      JOIN payments p ON p.id=r.payment_id
+      JOIN users u ON u.id=r.requested_by
+      WHERE r.branch_id=? AND r.party_id=? AND r.party_type=?
+      ORDER BY r.requested_at DESC,r.id DESC LIMIT 100''',
+      [branch,party,customer?'customer':'supplier']);
+    return requests.map((request)=>{...request,
+      'allocations':store.rows('''SELECT l.document_id AS invoice_id,
+        d.number AS invoice_number,l.amount_minor
+        FROM debt_reconciliation_lines l
+        JOIN documents d ON d.id=l.document_id
+        WHERE l.reconciliation_id=?
+        ORDER BY d.created_at,d.id''',[request['id']])}).toList();
+  }
+
+  Map<String,Object?> _requestDebtReconciliation(
+      Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,input['branch_id']);
+    final type=nonEmpty(input['party_type'],'party_type');
+    if(type!='customer' && type!='supplier') {
+      throw DomainError('Invalid party_type');
+    }
+    final customer=type=='customer';
+    final party=nonEmpty(input['party_id'],'party_id');
+    _party(customer?'customers':'suppliers',p,party);
+    final paymentId=nonEmpty(input['payment_id'],'payment_id');
+    final payment=_legacyDebtPayment(branch,party,paymentId,customer:customer);
+    final existing=store.first('''SELECT id FROM debt_reconciliations
+      WHERE payment_id=? AND status IN ('pending','approved')''',[paymentId]);
+    if(existing!=null) throw DomainError('Payment already has an active reconciliation',409);
+    final reason=nonEmpty(input['reason'],'reason');
+    if(reason.length<12 || reason.length>1000) {
+      throw DomainError('Reconciliation reason must contain 12..1000 characters');
+    }
+    final lines=_checkedReconciliationLines(
+      p,branch,party,input['allocations'],
+      customer:customer,paymentAmount:payment['amount_minor'] as int);
+    final id=_id(),at=_now();
+    store.exec('''INSERT INTO debt_reconciliations(
+      id,payment_id,branch_id,party_id,party_type,status,reason,
+      requested_by,requested_at)
+      VALUES(?,?,?,?,?,'pending',?,?,?)''',
+      [id,paymentId,branch,party,type,reason,p.id,at]);
+    for(final line in lines) {
+      store.exec('''INSERT INTO debt_reconciliation_lines(
+        id,reconciliation_id,document_id,amount_minor)
+        VALUES(?,?,?,?)''',
+        [_id(),id,line['invoice_id'],line['amount_minor']]);
+    }
+    _audit(p,'debt.reconciliation.request',id,
+      {'payment_id':paymentId,'amount_minor':payment['amount_minor'],
+        'allocations':lines,'reason':reason},branch);
+    return {'id':id,'status':'pending','payment_id':paymentId,
+      'amount_minor':payment['amount_minor'],'allocations':lines};
+  }
+
+  Map<String,Object?> _reviewDebtReconciliation(
+      Principal p,Map<String,dynamic> input,{required bool approve}) {
+    _allow(p,['owner','manager']);
+    final id=nonEmpty(input['reconciliation_id'],'reconciliation_id');
+    final request=store.first('''SELECT * FROM debt_reconciliations
+      WHERE id=?''',[id]);
+    if(request==null) throw DomainError('Reconciliation not found',404);
+    final branch=_branch(p,request['branch_id']);
+    if(request['status']!='pending') {
+      throw DomainError('Reconciliation has already been reviewed',409);
+    }
+    if(request['requested_by']==p.id) {
+      throw DomainError('A different manager must review the reconciliation',403);
+    }
+    final reason=nonEmpty(input['reason'],'reason');
+    if(reason.length<12 || reason.length>1000) {
+      throw DomainError('Review reason must contain 12..1000 characters');
+    }
+    final customer=request['party_type']=='customer';
+    final party=request['party_id'] as String;
+    final paymentId=request['payment_id'] as String;
+    _party(customer?'customers':'suppliers',p,party);
+    final payment=_legacyDebtPayment(branch,party,paymentId,customer:customer);
+    final saved=store.rows('''SELECT document_id,amount_minor
+      FROM debt_reconciliation_lines WHERE reconciliation_id=?
+      ORDER BY id''',[id]);
+    final allocationInput=[
+      for(final line in saved) {
+        'invoice_id':line['document_id'],
+        'amount_minor':line['amount_minor'],
+      }
+    ];
+    final checked=approve
+      ? _checkedReconciliationLines(p,branch,party,allocationInput,
+          customer:customer,paymentAmount:payment['amount_minor'] as int)
+      : <Map<String,Object?>>[];
+    if(approve) {
+      for(final line in checked) {
+        store.exec('''INSERT INTO debt_allocation_lines(
+          id,payment_id,document_id,branch_id,party_id,party_type,
+          amount_minor,created_at)
+          VALUES(?,?,?,?,?,?,?,?)''',
+          [_id(),paymentId,line['invoice_id'],branch,party,
+            customer?'customer':'supplier',line['amount_minor'],_now()]);
+      }
+    }
+    store.exec('''UPDATE debt_reconciliations SET status=?,
+      reviewed_by=?,reviewed_at=?,review_reason=? WHERE id=?''',
+      [approve?'approved':'rejected',p.id,_now(),reason,id]);
+    _audit(p,approve?'debt.reconciliation.approve':'debt.reconciliation.reject',
+      id,{'payment_id':paymentId,'review_reason':reason,
+        if(approve) 'allocations':checked},branch);
+    if(approve) _outbox(branch,'debt_reconciliation',{
+      'id':id,'payment_id':paymentId,'allocations':checked});
+    return {'id':id,'status':approve?'approved':'rejected',
+      'payment_id':paymentId,
+      if(approve) 'allocations':checked};
+  }
+
   Map<String,Object?> _invoiceRemaining(Principal p,String branch,
       String party,String invoiceId,{required bool customer}) {
     final kind=customer?'sale':'purchase';

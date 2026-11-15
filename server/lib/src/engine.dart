@@ -183,6 +183,10 @@ class PosEngine {
       case 'cash_drawer_create': return _createCashDrawer(p,input);
       case 'shift_open': return _shiftOpen(p,input);
       case 'shift_close': return _shiftClose(p,input);
+      case 'cash_transfer_request': return _requestCashTransfer(p,input);
+      case 'cash_transfer_approve': return _reviewCashTransfer(p,input,'approved');
+      case 'cash_transfer_reject': return _reviewCashTransfer(p,input,'rejected');
+      case 'cash_transfer_cancel': return _reviewCashTransfer(p,input,'cancelled');
       default: throw DomainError('Unknown command',404);
     }
   }
@@ -1896,9 +1900,163 @@ class PosEngine {
   }
 
   int _drawerCashDelta(String shiftId) {
-    return store.first('''SELECT COALESCE(SUM(cash_delta_minor),0) AS total
+    final journal=store.first('''SELECT COALESCE(SUM(cash_delta_minor),0) AS total
       FROM cash_shift_journal_links WHERE shift_id=?''',
       [shiftId])!['total'] as int;
+    final received=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM cash_drawer_transfers
+      WHERE destination_shift_id=? AND status='approved' ''',
+      [shiftId])!['total'] as int;
+    final sent=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM cash_drawer_transfers
+      WHERE source_shift_id=? AND status='approved' ''',
+      [shiftId])!['total'] as int;
+    return journal+received-sent;
+  }
+
+  Map<String,Object?> _openDrawerShift(String branch,String shiftId) {
+    final shift=store.first('''SELECT s.id,s.user_id,s.drawer_id,
+      s.opening_minor,s.branch_id
+      FROM cash_shifts s JOIN cash_drawers d ON d.id=s.drawer_id
+      WHERE s.id=? AND s.branch_id=? AND s.closed_at IS NULL
+        AND d.active=1 AND d.branch_id=s.branch_id''',[shiftId,branch]);
+    if(shift==null) throw DomainError('Active cash drawer shift not found',409);
+    return shift;
+  }
+
+  int _drawerExpected(Map<String,Object?> shift) =>
+    (shift['opening_minor'] as int)+_drawerCashDelta(shift['id'] as String);
+
+  String _cashTransferReason(Object? value,String name) {
+    if(value is! String) throw DomainError('$name must be a written reason');
+    final reason=value.trim();
+    if(reason.length<12 || reason.length>500) {
+      throw DomainError('$name must contain 12..500 characters');
+    }
+    return reason;
+  }
+
+  Map<String,Object?> _requestCashTransfer(
+      Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final branch=_branch(p,input['branch_id']);
+    final fromId=nonEmpty(input['source_shift_id'],'source_shift_id');
+    final toId=nonEmpty(input['destination_shift_id'],'destination_shift_id');
+    if(fromId==toId) throw DomainError('Choose two different cash drawers',409);
+    final from=_openDrawerShift(branch,fromId);
+    final to=_openDrawerShift(branch,toId);
+    if(from['drawer_id']==to['drawer_id']) {
+      throw DomainError('Cash cannot transfer to the same drawer',409);
+    }
+    if(from['user_id']!=p.id) {
+      throw DomainError('Only the sending cashier can initiate a transfer',403);
+    }
+    if(to['user_id']==p.id) {
+      throw DomainError('Transfer requires a different receiving operator',403);
+    }
+    final amount=strictInt(input['amount_minor'],'amount_minor',min:1);
+    if(amount>1000000000) throw DomainError('Cash transfer amount exceeds limit',409);
+    final reason=_cashTransferReason(input['reason'],'reason');
+    if(amount>_drawerExpected(from)) {
+      throw DomainError('Transfer exceeds the sender cash drawer balance',409);
+    }
+    final pending=store.first('''SELECT COUNT(*) AS total FROM cash_drawer_transfers
+      WHERE source_shift_id=? AND status='pending' ''',[fromId])!['total'] as int;
+    if(pending>=20) throw DomainError('Too many pending drawer transfers',409);
+    final id=_id(),at=_now();
+    store.exec('''INSERT INTO cash_drawer_transfers
+      (id,branch_id,source_shift_id,destination_shift_id,amount_minor,
+       reason,status,requested_by,requested_at)
+      VALUES(?,?,?,?,?,?,'pending',?,?)''',
+      [id,branch,fromId,toId,amount,reason,p.id,at]);
+    _audit(p,'cash_transfer.request',id,{'source_shift_id':fromId,
+      'destination_shift_id':toId,'amount_minor':amount,'reason':reason},branch);
+    _outbox(branch,'cash_transfer',{'id':id,'status':'pending',
+      'source_shift_id':fromId,'destination_shift_id':toId});
+    return {'id':id,'status':'pending','amount_minor':amount,
+      'source_shift_id':fromId,'destination_shift_id':toId};
+  }
+
+  Map<String,Object?> _reviewCashTransfer(
+      Principal p,Map<String,dynamic> input,String decision) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final transferId=nonEmpty(input['transfer_id'],'transfer_id');
+    final transfer=store.first('SELECT * FROM cash_drawer_transfers WHERE id=?',
+      [transferId]);
+    if(transfer==null) throw DomainError('Cash transfer not found',404);
+    final branch=_branch(p,transfer['branch_id']);
+    if(transfer['status']!='pending') {
+      throw DomainError('Cash transfer already reviewed',409);
+    }
+    final fromId=transfer['source_shift_id'] as String;
+    final toId=transfer['destination_shift_id'] as String;
+    // Cancel and reject only release a proposal. Neither changes balances.
+    // Approval is the receiving operator's explicit evidence of physical cash
+    // receipt: a manager cannot sign on their behalf.
+    if(decision=='cancelled') {
+      if(p.id!=transfer['requested_by']) {
+        throw DomainError('Only the sender can cancel a transfer',403);
+      }
+    }else {
+      final to=_openDrawerShift(branch,toId);
+      if(to['user_id']!=p.id || p.id==transfer['requested_by']) {
+        throw DomainError('Only the independent receiving operator may review',403);
+      }
+    }
+    final reason=_cashTransferReason(input['reason'],'review_reason');
+    if(decision=='approved') {
+      final from=_openDrawerShift(branch,fromId);
+      final to=_openDrawerShift(branch,toId);
+      if(from['user_id']!=transfer['requested_by'] ||
+         to['user_id']!=p.id ||
+         from['drawer_id']==to['drawer_id']) {
+        throw DomainError('Transfer operators or drawer shifts changed',409);
+      }
+      if((transfer['amount_minor'] as int)>_drawerExpected(from)) {
+        throw DomainError('Transfer exceeds current sender balance',409);
+      }
+    }
+    final at=_now();
+    store.exec('''UPDATE cash_drawer_transfers
+      SET status=?,reviewed_by=?,reviewed_at=?,review_reason=?
+      WHERE id=? AND status='pending' ''',
+      [decision,p.id,at,reason,transferId]);
+    _audit(p,'cash_transfer.$decision',transferId,{
+      'source_shift_id':fromId,'destination_shift_id':toId,
+      'amount_minor':transfer['amount_minor'],'review_reason':reason},branch);
+    _outbox(branch,'cash_transfer',{'id':transferId,'status':decision,
+      'source_shift_id':fromId,'destination_shift_id':toId});
+    return {'id':transferId,'status':decision,
+      'amount_minor':transfer['amount_minor'],'source_shift_id':fromId,
+      'destination_shift_id':toId,
+      if(decision=='approved')
+        'sender_expected_minor':_drawerExpected(_openDrawerShift(branch,fromId)),
+      if(decision=='approved')
+        'receiver_expected_minor':_drawerExpected(_openDrawerShift(branch,toId))};
+  }
+
+  List<Map<String,Object?>> listCashTransfers(Principal p,String branchId) {
+    _allow(p,['owner','manager','cashier','purchasing']);
+    final branch=_branch(p,branchId);
+    final all=store.rows('''SELECT t.id,t.branch_id,t.source_shift_id,
+      t.destination_shift_id,t.amount_minor,t.reason,t.status,
+      t.requested_by,t.reviewed_by,t.requested_at,t.reviewed_at,
+      t.review_reason,source.user_id AS source_user_id,
+      dest.user_id AS destination_user_id,
+      from_drawer.name AS source_drawer_name,
+      to_drawer.name AS destination_drawer_name
+      FROM cash_drawer_transfers t
+      JOIN cash_shifts source ON source.id=t.source_shift_id
+      JOIN cash_shifts dest ON dest.id=t.destination_shift_id
+      JOIN cash_drawers from_drawer ON from_drawer.id=source.drawer_id
+      JOIN cash_drawers to_drawer ON to_drawer.id=dest.drawer_id
+      WHERE t.branch_id=?
+      ORDER BY t.requested_at DESC,t.id DESC LIMIT 200''',[branch]);
+    if(p.role=='cashier' || p.role=='purchasing') {
+      all.removeWhere((row)=>row['source_user_id']!=p.id &&
+        row['destination_user_id']!=p.id);
+    }
+    return all;
   }
 
   Map<String,Object?> _shiftClose(Principal p,Map<String,dynamic> input) {
@@ -1921,6 +2079,13 @@ class PosEngine {
       if(overrideReason.length<12 || overrideReason.length>500) {
         throw DomainError('Supervisor override reason must be 12..500 characters');
       }
+    }
+    if(shift['drawer_id']!=null &&
+      store.first('''SELECT id FROM cash_drawer_transfers
+        WHERE status='pending'
+          AND (source_shift_id=? OR destination_shift_id=?)
+        LIMIT 1''',[id,id])!=null) {
+      throw DomainError('Review or cancel pending cash transfers before closing shift',409);
     }
     final actual=strictInt(input['closing_actual_minor'],'closing_actual_minor');
     final expected=(shift['opening_minor'] as int)+

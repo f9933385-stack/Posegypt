@@ -74,6 +74,67 @@ void main() {
     expect(afterReturn['gross_profit_minor'],0);
   });
 
+  test('branch debt settlement and statement never consume another branch debt', () {
+    final product=call('create_product',{
+      'sku':'BRANCH-DEBT-1','name_ar':'سكر فروع','sell_price_minor':200});
+    final supplier=call('create_supplier',{'name':'مورد مشترك'});
+    final customer=call('create_customer',{
+      'name':'عميل مشترك','credit_limit_minor':1000});
+    final destination=call('create_branch',{'name':'فرع آخر','code':'BR28'});
+    final other=destination['id'] as String;
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,'unit_cost_minor':90}],
+      'payments':<Map<String,dynamic>>[]});
+    call('purchase',{'branch_id':other,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000,'unit_cost_minor':60}],
+      'payments':<Map<String,dynamic>>[]});
+    // Aggregate supplier debt is 150, but only 60 belongs to the other branch.
+    expect(() => call('supplier_payment',{'branch_id':other,
+      'supplier_id':supplier['id'],'amount_minor':90,'method':'cash'}),
+      throwsA(isA<DomainError>().having((e)=>e.status,'status',409)));
+    expect(engine.dashboard(owner,other)['supplier_payables_minor'],60);
+    call('supplier_payment',{'branch_id':other,
+      'supplier_id':supplier['id'],'amount_minor':30,'method':'cash'});
+    final supplierStatement=engine.debtStatement(owner,other,
+      supplier['id'] as String,customer:false);
+    expect(supplierStatement['balance_minor'],30);
+    expect(supplierStatement['opening_minor'],0);
+    final supplierRows=supplierStatement['entries'] as List<Map<String,Object?>>;
+    expect(supplierRows.length,2);
+    expect(supplierRows.first['change_minor'],-30);
+    expect(supplierRows.first['balance_after_minor'],30);
+    expect(supplierRows.last['change_minor'],60);
+    expect(supplierRows.last['balance_after_minor'],60);
+    expect(engine.debtStatement(owner,branch,
+      supplier['id'] as String,customer:false)['balance_minor'],90);
+    final listed=engine.listParties(owner,customers:false,branchId:other);
+    expect(listed.single['balance_minor'],30);
+
+    call('sale',{'branch_id':branch,'customer_id':customer['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':<Map<String,dynamic>>[]});
+    expect(() => call('customer_receipt',{'branch_id':other,
+      'customer_id':customer['id'],'amount_minor':20,'method':'cash'}),
+      throwsA(isA<DomainError>().having((e)=>e.status,'status',409)));
+    expect(engine.debtStatement(owner,other,
+      customer['id'] as String,customer:true)['balance_minor'],0);
+    call('customer_receipt',{'branch_id':branch,
+      'customer_id':customer['id'],'amount_minor':50,'method':'cash'});
+    final customerStatement=engine.debtStatement(owner,branch,
+      customer['id'] as String,customer:true);
+    expect(customerStatement['balance_minor'],150);
+    expect(customerStatement['entries'],hasLength(2));
+    expect(engine.listParties(owner,customers:true,branchId:branch)
+      .single['balance_minor'],150);
+    final forbidden=Principal(owner.id,owner.tenantId,other,'manager','manager');
+    expect(() => engine.debtStatement(forbidden,branch,
+      customer['id'] as String,customer:true),
+      throwsA(isA<DomainError>().having((e)=>e.status,'status',403)));
+    expect(store.rows('''SELECT e.id FROM journal_entries e
+      JOIN journal_lines l ON e.id=l.entry_id
+      GROUP BY e.id HAVING SUM(l.debit_minor-l.credit_minor)<>0'''),isEmpty);
+  });
+
   test('replaying same idempotency key does not duplicate stock', () {
     final p=call('create_product',{'sku':'B1','name_ar':'سكر','sell_price_minor':200});
     final s=call('create_supplier',{'name':'شركة'});

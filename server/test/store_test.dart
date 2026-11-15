@@ -17,11 +17,11 @@ void main() {
 
   test('initial migration and reopen are idempotent', () {
     final first=DatabaseStore.open(path);
-    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 14);
+    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 15);
     expect(first.first("SELECT name FROM sqlite_master WHERE name='products'")?['name'], 'products');
     first.dispose();
     final second=DatabaseStore.open(path);
-    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 14);
+    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 15);
     second.dispose();
   });
 
@@ -39,7 +39,7 @@ void main() {
     }
     final migrated=DatabaseStore.open(path);
     try {
-      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
+      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],15);
       expect(migrated.first("SELECT name_ar FROM products WHERE id='P'")?['name_ar'],'Old Product');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='product_units'")?['name'],
         'product_units');
@@ -102,7 +102,7 @@ void main() {
     } finally {raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],15);
       expect(upgraded.first("SELECT amount_minor FROM debt_allocations WHERE id='ALLOC'")?['amount_minor'],100);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],100);
       expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_allocation_lines'")?['name'],
@@ -161,7 +161,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],15);
       expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],300);
       expect(upgraded.first("SELECT COUNT(*) AS n FROM debt_allocation_lines WHERE payment_id='PAY'")?['n'],2);
       expect(upgraded.first("SELECT SUM(amount_minor) AS total FROM debt_allocation_lines WHERE payment_id='PAY'")?['total'],300);
@@ -221,7 +221,7 @@ void main() {
     }finally{raw.dispose();}
     final upgraded=DatabaseStore.open(path);
     try {
-      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],15);
       expect(upgraded.first("""SELECT amount_minor FROM debt_credit_allocations
         WHERE credit_document_id='RET1' AND document_id='SALE'""")?['amount_minor'],100);
       expect(upgraded.first("""SELECT COUNT(*) AS n FROM debt_credit_allocations
@@ -244,6 +244,46 @@ void main() {
     try {
       expect(reopened.first("SELECT COUNT(*) AS n FROM debt_credit_allocations")?['n'],1);
     }finally{reopened.dispose();}
+  });
+
+  test('v14 shared shift and financial journal survive v15 drawer migration',(){
+    final raw=sqlite3.open(path);
+    try {
+      raw.execute('PRAGMA foreign_keys=ON');
+      for(final migration in [
+        schemaV1,schemaV2,schemaV3,schemaV4,schemaV5,schemaV6,
+        schemaV7,schemaV8,schemaV9,schemaV10,schemaV11,
+        schemaV12,schemaV13,schemaV14
+      ]) {
+        for(final statement in migration){raw.execute(statement);}
+      }
+      raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      for(var v=1;v<=14;v++){
+        raw.execute('INSERT INTO schema_version(version) VALUES(?)',[v]);
+      }
+      raw.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Original','now')");
+      raw.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B','T','BR01','Branch','now')");
+      raw.execute("INSERT INTO warehouses(id,branch_id,name,is_default) VALUES('W','B','Main',1)");
+      raw.execute("INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at) VALUES('U','T','B','owner','s','h','owner','now')");
+      raw.execute("INSERT INTO cash_shifts(id,branch_id,user_id,opening_minor,opened_at) VALUES('SHIFT','B','U',1000,'2026-01-01')");
+      raw.execute("INSERT INTO journal_entries(id,branch_id,reference_type,reference_id,created_by,created_at) VALUES('J','B','sale','DOC','U','2026-01-01')");
+      raw.execute("INSERT INTO journal_lines(id,entry_id,account,debit_minor,credit_minor) VALUES('L1','J','CASH',200,0)");
+      raw.execute("INSERT INTO journal_lines(id,entry_id,account,debit_minor,credit_minor) VALUES('L2','J','SALES_REVENUE',0,200)");
+    }finally{raw.dispose();}
+    final upgraded=DatabaseStore.open(path);
+    try {
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],15);
+      expect(upgraded.first("SELECT drawer_id FROM cash_shifts WHERE id='SHIFT'")?['drawer_id'],null);
+      expect(upgraded.first("SELECT opening_minor FROM cash_shifts WHERE id='SHIFT'")?['opening_minor'],1000);
+      expect(upgraded.first("SELECT SUM(debit_minor-credit_minor) AS n FROM journal_lines WHERE entry_id='J'")?['n'],0);
+      expect(upgraded.first("SELECT COUNT(*) AS n FROM cash_shift_journal_links")?['n'],0);
+      expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
+    }finally{upgraded.dispose();}
+    final again=DatabaseStore.open(path);
+    try {
+      expect(again.first('SELECT COUNT(*) AS n FROM schema_version')?['n'],15);
+      expect(again.first("SELECT COUNT(*) AS n FROM cash_drawers")?['n'],0);
+    }finally{again.dispose();}
   });
 
   test('newer schema is refused without downgrading data', () {

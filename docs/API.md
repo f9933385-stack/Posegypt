@@ -445,9 +445,11 @@ An opt-in physical **branch safe** tracks cash already held within the
 same branch. It is **not a bank account** and does not represent a new
 CASH general-ledger movement or a second receipt.
 
-- `GET /api/v1/shifts/safe?branch_id=...`: returns a safe record
-  and `balance_minor` (sum of approved safe drops), or
-  `{registered:false,branch_id,balance_minor:0}` when no safe exists.
+- `GET /api/v1/shifts/safe?branch_id=...`: returns safe registration
+  details, plus `balance_minor` (sum of approved drops) **only** for
+  owner/manager. Cashier/purchasing roles see safe identity but not its
+  expected cash balance. When absent, returns
+  `{registered:false,branch_id,balance_minor:0}`.
 - `POST /api/v1/shifts/safe`: owner/manager only, accepts
   `{branch_id,name}` (name 1–60 chars). Requires independent
   cash drawers already registered in that branch. One safe per

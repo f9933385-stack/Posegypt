@@ -240,3 +240,39 @@ Only **one** invoice per settlement is supported; this does not yet perform
 automatic FIFO distribution, payment allocation across multiple invoices,
 historical reconciliation or customer credits after overpaid returns.
 See [Arabic operator guide](INVOICE_ALLOCATIONS_AR.md).
+
+
+## Split settlement across several invoices (schema v12)
+
+Both `POST /api/v1/customers/receipts` and
+`POST /api/v1/suppliers/payments` now accept an optional `allocations` array
+instead of `invoice_id`:
+
+```json
+{
+  "branch_id": "<branch-id>",
+  "supplier_id": "<supplier-id>",
+  "method": "bank",
+  "amount_minor": 900,
+  "allocations": [
+    {"invoice_id": "<invoice-A-id>", "amount_minor": 600},
+    {"invoice_id": "<invoice-B-id>", "amount_minor": 300}
+  ]
+}
+```
+
+The API validates 1–20 unique invoices with **positive integer-piaster**
+allocations whose sum **exactly equals** the payment amount, without
+exceeding any individual invoice balance, the party's branch journal balance,
+or crossing a tenant/party/branch. `invoice_id` and `allocations` cannot
+be submitted together. A single payment row and journal entry is posted,
+with one immutable `debt_allocation_lines` row per invoice; all writes and
+the idempotency key run in the same SQLite transaction. The response includes
+`allocations` with each invoice's `invoice_remaining_minor`.
+
+Existing v11 single-invoice allocations remain untouched and included in
+invoice remaining balances. Legacy untargeted payments still block new
+targeted allocations pending human reconciliation. This workflow does not
+auto-allocate oldest invoices, net returns that over-credit prior payments,
+or reconcile historical unallocated receipts. The Flutter form supports
+manual split input across at most 20 of the currently displayed invoices.

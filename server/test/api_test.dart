@@ -461,6 +461,85 @@ void main() {
     expect(store.rows('SELECT * FROM debt_credit_allocations'),hasLength(1));
   });
 
+  test('HTTP cash drawers isolate cashier shift postings and require explicit opening',() async {
+    final admin=await token();
+    var seq=0;
+    Future<Map<String,dynamic>> post(String route,String bearer,
+        Map<String,dynamic> body) async {
+      final response=await send('POST','/api/v1/$route',body:body,
+        headers:{'authorization':'Bearer $bearer',
+          'idempotency-key':'multi-drawer-api-${seq++}-unique-key'});
+      final text=await response.readAsString();
+      expect(response.statusCode,201,reason:text);
+      return Map<String,dynamic>.from(jsonDecode(text) as Map);
+    }
+    final first=await post('shifts/drawers',admin,{
+      'branch_id':setup['branch_id'],'name':'درج أمين الصندوق'});
+    final second=await post('shifts/drawers',admin,{
+      'branch_id':setup['branch_id'],'name':'الدرج الثاني'});
+    final list=await send('GET',
+      '/api/v1/shifts/drawers?branch_id=${setup['branch_id']}',
+      headers:{'authorization':'Bearer $admin'});
+    expect(list.statusCode,200);
+    expect(jsonDecode(await list.readAsString()),hasLength(2));
+    final user=await post('users',admin,{
+      'branch_id':setup['branch_id'],'username':'drawer-http-operator',
+      'password':'drawer-http-password-123','role':'cashier'});
+    expect(user['role'],'cashier');
+    final login=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'drawer-http-operator',
+      'password':'drawer-http-password-123'});
+    expect(login.statusCode,200);
+    final cashier=(jsonDecode(await login.readAsString()) as Map)['token'] as String;
+    final refused=await send('POST','/api/v1/shifts/drawers',
+      body:{'branch_id':setup['branch_id'],'name':'ممنوع'},
+      headers:{'authorization':'Bearer $cashier',
+        'idempotency-key':'cashier-drawer-create-forbidden-123'});
+    expect(refused.statusCode,403);
+    final supplier=await post('suppliers',admin,{'name':'مورد'});
+    final product=await post('products',admin,{
+      'sku':'HTTP-DRAWER-1','name_ar':'زيت','sell_price_minor':300});
+    await post('purchases',admin,{'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':3000,
+        'unit_cost_minor':100}],'payments':<Map<String,dynamic>>[]});
+    final sale=<String,dynamic>{'branch_id':setup['branch_id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':[{'method':'cash','amount_minor':300}]};
+    final premature=await send('POST','/api/v1/sales',body:sale,
+      headers:{'authorization':'Bearer $cashier',
+        'idempotency-key':'no-shift-cash-sale-http-123'});
+    expect(premature.statusCode,409);
+    expect(store.rows('SELECT * FROM cash_shift_journal_links'),isEmpty);
+    final opened=await post('shifts/open',cashier,{
+      'branch_id':setup['branch_id'],
+      'cash_drawer_id':first['id'],'opening_minor':1000});
+    await post('shifts/open',admin,{
+      'branch_id':setup['branch_id'],
+      'cash_drawer_id':second['id'],'opening_minor':2000});
+    final posted=await post('sales',cashier,sale);
+    expect(posted['total_minor'],300);
+    expect(store.rows('SELECT * FROM cash_shift_journal_links'),hasLength(1));
+    final wrongClose=await send('POST','/api/v1/shifts/close',body:{
+      'branch_id':setup['branch_id'],'shift_id':opened['id'],
+      'closing_actual_minor':1300},
+      headers:{'authorization':'Bearer $admin',
+        'idempotency-key':'cross-employee-close-without-reason-123'});
+    expect(wrongClose.statusCode,400);
+    final closed=await post('shifts/close',cashier,{
+      'branch_id':setup['branch_id'],'shift_id':opened['id'],
+      'closing_actual_minor':1300});
+    expect(closed['expected_minor'],1300);
+    expect(closed['difference_minor'],0);
+    final after=await send('GET',
+      '/api/v1/shifts?branch_id=${setup['branch_id']}',
+      headers:{'authorization':'Bearer $cashier'});
+    final rows=jsonDecode(await after.readAsString()) as List;
+    expect(rows,hasLength(1));
+    expect(rows.single['drawer_name'],'درج أمين الصندوق');
+    expect(rows.single['user_id'],user['id']);
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

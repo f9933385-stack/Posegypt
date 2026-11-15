@@ -215,3 +215,28 @@ cash applied against an unrelated branch's debt. Customer **credit-limit**
 checking remains intentionally tenant-wide until the per-branch credit
 policy is approved. Cross-branch reallocations, per-invoice allocation, and
 multi-host replication are **not implemented**. No balances are silently moved.
+
+
+## Invoice-targeted debt settlement (schema v11)
+
+An optional `invoice_id` is now accepted on
+`POST /api/v1/customers/receipts` and `POST /api/v1/suppliers/payments`.
+The target must be an approved posted sale/purchase belonging to the same
+tenant, branch, and customer/supplier. The amount must not exceed the
+remaining invoice credit balance **or** the branch's journal liability.
+A targeted payment writes an immutable `debt_allocations` row and its cash,
+journal and audit records atomically with the existing idempotency key.
+
+`GET /api/v1/debts/invoices?branch_id=...&party_id=...&party_type=customer|supplier`
+lists up to 500 recent invoices with positive remaining credit, deducting
+upfront payments, explicit allocations and credit-form returns. It also
+returns `balance_minor`, `unallocated_settlements_minor`,
+`allocation_available`, and `has_more`. A legacy account-wide settlement
+with no target prevents **new targeted allocations** for that party and
+branch until separately reviewed; historical allocations are never guessed.
+The untargeted legacy settlement route remains supported.
+
+Only **one** invoice per settlement is supported; this does not yet perform
+automatic FIFO distribution, payment allocation across multiple invoices,
+historical reconciliation or customer credits after overpaid returns.
+See [Arabic operator guide](INVOICE_ALLOCATIONS_AR.md).

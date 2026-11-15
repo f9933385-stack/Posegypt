@@ -758,6 +758,14 @@ class PosEngine {
   int _accountBalance(String account) => (store.first('''SELECT COALESCE(SUM(l.debit_minor - l.credit_minor),0) AS balance
     FROM journal_lines l WHERE l.account=?''',[account])!['balance'] as int);
 
+  // Cash/debt settlement must stay in the branch that owns the balance.
+  // The tenant-wide balance above is deliberately retained for the existing
+  // enterprise-wide customer credit-limit policy, pending owner approval.
+  int _branchAccountBalance(String account,String branch) =>
+    (store.first('''SELECT COALESCE(SUM(l.debit_minor - l.credit_minor),0) AS balance
+      FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
+      WHERE l.account=? AND e.branch_id=?''',[account,branch])!['balance'] as int);
+
   Map<String,Object?> _settle(Principal p,Map<String,dynamic> input,{required bool customer}) {
     _allow(p,customer?['owner','manager','cashier']:['owner','manager','purchasing']);
     final branch=_branch(p,input['branch_id']);
@@ -766,7 +774,7 @@ class PosEngine {
     final amount=strictInt(input['amount_minor'],'amount_minor',min:1);
     final method=nonEmpty(input['method'],'method'),payAcc=_payAccount(method);
     final account='${customer?'AR':'AP'}:$party';
-    final outstanding=_accountBalance(account) * (customer?1:-1);
+    final outstanding=_branchAccountBalance(account,branch) * (customer?1:-1);
     if(amount>outstanding) throw DomainError('Amount exceeds outstanding debt',409);
     final id=_id(),direction=customer?'in':'out';
     store.exec('''INSERT INTO payments(id,branch_id,party_id,method,direction,amount_minor,reference,created_at)
@@ -1551,12 +1559,53 @@ class PosEngine {
     }).toList();
   }
 
-  List<Map<String,Object?>> listParties(Principal p,{required bool customers}) {
+  List<Map<String,Object?>> listParties(Principal p,{required bool customers,String? branchId}) {
     if (!customers) _allow(p,['owner','manager','purchasing']);
+    final branch=branchId==null ? null : _branch(p,branchId);
     final result=store.rows('SELECT * FROM ${customers?'customers':'suppliers'} WHERE tenant_id=? ORDER BY name LIMIT 500',[p.tenantId]);
+    final showBalance=p.isOwner || p.isManager ||
+      (branch!=null && (customers?p.role=='cashier':p.role=='purchasing'));
     return result.map((r) => {...r,
-      if(p.role=='owner' || p.role=='manager') 'balance_minor':
-        _accountBalance('${customers?'AR':'AP'}:${r['id']}')*(customers?1:-1)}).toList();
+      if(showBalance) 'balance_minor':
+        (branch==null
+          ? _accountBalance('${customers?'AR':'AP'}:${r['id']}')
+          : _branchAccountBalance('${customers?'AR':'AP'}:${r['id']}',branch)) *
+        (customers?1:-1)}).toList();
+  }
+
+  /// Posted, journal-derived branch statement.  No invoices or balances are
+  /// rewritten; returns and mixed payments appear as actual journal entries.
+  /// The first balance includes entries before the latest 200 shown.
+  Map<String,Object?> debtStatement(Principal p,String branchId,String partyId,
+      {required bool customer}) {
+    _allow(p,customer?['owner','manager','cashier']:
+      ['owner','manager','purchasing']);
+    final branch=_branch(p,branchId);
+    final party=_party(customer?'customers':'suppliers',p,
+      nonEmpty(partyId,'party_id'));
+    final account=(customer?'AR:':'AP:')+partyId;
+    final sign=customer?1:-1;
+    final history=store.rows('''SELECT e.id AS entry_id,e.reference_type,
+      e.reference_id,e.created_at,
+      SUM(l.debit_minor) AS debit_minor,SUM(l.credit_minor) AS credit_minor
+      FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id
+      WHERE e.branch_id=? AND l.account=?
+      GROUP BY e.id ORDER BY e.created_at DESC,e.rowid DESC LIMIT 200''',
+      [branch,account]);
+    final current=_branchAccountBalance(account,branch)*sign;
+    var balance=current;
+    final entries=<Map<String,Object?>>[];
+    for(final item in history) {
+      final delta=((item['debit_minor'] as int) -
+        (item['credit_minor'] as int))*sign;
+      entries.add({...item,'change_minor':delta,
+        'balance_after_minor':balance});
+      balance-=delta;
+    }
+    return {'party_id':partyId,'party_name':party['name'],
+      'party_type':customer?'customer':'supplier','branch_id':branch,
+      'balance_minor':current,'opening_minor':balance,
+      'entries':entries};
   }
 
   List<Map<String,Object?>> listWarehouses(Principal p,String branchId) {

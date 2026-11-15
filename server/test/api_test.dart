@@ -624,6 +624,79 @@ void main() {
     expect(operatorA['id'],isNot(operatorB['id']));
   });
 
+  test('HTTP physical safe drop is proposed by cashier and approved by another manager',() async {
+    final owner=await token();
+    var seq=0;
+    Future<Map<String,dynamic>> post(String path,String auth,
+        Map<String,dynamic> body,{String? replay}) async {
+      final r=await send('POST','/api/v1/$path',
+        headers:{'authorization':'Bearer $auth',
+          'idempotency-key':replay??'safe-http-idempotency-${seq++}-123456'},
+        body:body);
+      final raw=await r.readAsString();
+      expect(r.statusCode,201,reason:'$path: $raw');
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+    final first=await post('shifts/drawers',owner,{
+      'branch_id':setup['branch_id'],'name':'درج رقم 1'});
+    final safe=await post('shifts/safe',owner,{
+      'branch_id':setup['branch_id'],'name':'خزينة الفرع'});
+    final user=await post('users',owner,{
+      'branch_id':setup['branch_id'],'username':'safe-http-cashier',
+      'password':'safe-cashier-password-123','role':'cashier'});
+    final login=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'safe-http-cashier',
+      'password':'safe-cashier-password-123'});
+    expect(login.statusCode,200);
+    final cashier=(jsonDecode(await login.readAsString()) as Map)['token'] as String;
+    final shift=await post('shifts/open',cashier,{
+      'branch_id':setup['branch_id'],'cash_drawer_id':first['id'],
+      'opening_minor':1500});
+    final beforeJournal=store.rows('SELECT id FROM journal_entries').length;
+    final drop=<String,dynamic>{'branch_id':setup['branch_id'],
+      'source_shift_id':shift['id'],'amount_minor':300,
+      'reason':'محضر تسليم نقدية من الدرج للخزينة'};
+    const key='http-safe-drop-replay-key-123456';
+    final request=await post('shifts/safe/drops',cashier,drop,replay:key);
+    expect(await post('shifts/safe/drops',cashier,drop,replay:key),request);
+    expect(request['status'],'pending');
+    expect(store.rows('SELECT id FROM journal_entries'),hasLength(beforeJournal));
+    final ownerSafe=await send('GET',
+      '/api/v1/shifts/safe?branch_id=${setup['branch_id']}',
+      headers:{'authorization':'Bearer $owner'});
+    expect(ownerSafe.statusCode,200);
+    expect((jsonDecode(await ownerSafe.readAsString()) as Map)['balance_minor'],0);
+    final wrong=await send('POST','/api/v1/shifts/safe/drops/approve',
+      headers:{'authorization':'Bearer $cashier',
+        'idempotency-key':'safe-http-self-approval-123456'},
+      body:{'drop_id':request['id'],
+        'reason':'محاولة اعتماد الكاشير لعهدة نفسه'});
+    expect(wrong.statusCode,403);
+    final list=await send('GET',
+      '/api/v1/shifts/safe/drops?branch_id=${setup['branch_id']}',
+      headers:{'authorization':'Bearer $cashier'});
+    expect(list.statusCode,200);
+    expect((jsonDecode(await list.readAsString()) as List).single['id'],
+      request['id']);
+    final accepted=await post('shifts/safe/drops/approve',owner,{
+      'drop_id':request['id'],
+      'reason':'تم استلام العهدة بالخزينة بعد العد الفعلي'});
+    expect(accepted['status'],'approved');
+    expect(accepted['safe_balance_minor'],300);
+    expect(accepted['sender_expected_minor'],1200);
+    expect(store.rows('SELECT id FROM journal_entries'),hasLength(beforeJournal));
+    final closed=await post('shifts/close',cashier,{
+      'branch_id':setup['branch_id'],'shift_id':shift['id'],
+      'closing_actual_minor':1200});
+    expect(closed['difference_minor'],0);
+    final after=await send('GET',
+      '/api/v1/shifts/safe?branch_id=${setup['branch_id']}',
+      headers:{'authorization':'Bearer $owner'});
+    expect((jsonDecode(await after.readAsString()) as Map)['balance_minor'],300);
+    expect(user['id'],isNotNull);
+    expect(safe['id'],request['safe_id']);
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

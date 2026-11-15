@@ -248,6 +248,67 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         con.close()
         self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
 
+    def test_reconciliation_review_and_approved_links_are_audited(self):
+        con = sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO users(id,tenant_id,branch_id,username,password_salt,
+            password_hash,role,created_at)
+          VALUES('REVIEWER','T','B','reviewer','s','h','manager','now')
+        """)
+        con.execute("""
+          INSERT INTO suppliers(id,tenant_id,name,created_at)
+          VALUES('RECON_SUP','T','Historical vendor','now')
+        """)
+        con.execute("""
+          INSERT INTO documents(
+            id,tenant_id,branch_id,warehouse_id,kind,number,party_id,
+            subtotal_minor,discount_minor,tax_minor,total_minor,
+            paid_minor,cost_minor,snapshot_json,created_by,created_at)
+          VALUES('RECON_DOC','T','B','W','purchase','RECON-01','RECON_SUP',
+            100,0,0,100,0,100,'{}','U','now')
+        """)
+        con.execute("""
+          INSERT INTO payments(
+            id,branch_id,party_id,method,direction,amount_minor,created_at)
+          VALUES('RECON_PAY','B','RECON_SUP','cash','out',100,'now')
+        """)
+        con.execute("""
+          INSERT INTO debt_reconciliations(
+            id,payment_id,branch_id,party_id,party_type,status,
+            reason,requested_by,reviewed_by,requested_at,reviewed_at,review_reason)
+          VALUES('RECON','RECON_PAY','B','RECON_SUP','supplier',
+            'approved','verified old transfer','U','REVIEWER','old','now',
+            'independent paper audit')
+        """)
+        con.execute("""
+          INSERT INTO debt_reconciliation_lines(
+            id,reconciliation_id,document_id,amount_minor)
+          VALUES('REQUEST_LINE','RECON','RECON_DOC',100)
+        """)
+        con.execute("""
+          INSERT INTO debt_allocation_lines(
+            id,payment_id,document_id,branch_id,party_id,
+            party_type,amount_minor,created_at)
+          VALUES('MATCHED_LINE','RECON_PAY','RECON_DOC','B','RECON_SUP',
+            'supplier',100,'now')
+        """)
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE debt_reconciliations SET reviewed_by='U' WHERE id='RECON'")
+        con.commit()
+        con.close()
+        self.assertIn('debt_reconciliation_review_controls',
+                      audit(str(self.db))['errors'])
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE debt_reconciliations SET reviewed_by='REVIEWER' WHERE id='RECON'")
+        con.execute("UPDATE debt_reconciliation_lines SET amount_minor=90 WHERE id='REQUEST_LINE'")
+        con.commit()
+        con.close()
+        self.assertIn('approved_debt_reconciliation_matches_allocations',
+                      audit(str(self.db))['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

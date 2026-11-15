@@ -278,6 +278,53 @@ def audit(db_file: str) -> dict:
                   WHERE old.payment_id=r.payment_id)
               )
             """)
+        has_credit_allocations = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='debt_credit_allocations'
+        """).fetchone() is not None
+        if has_credit_allocations:
+            check("debt_credit_allocation_scope", """
+              SELECT a.id,a.credit_document_id,a.document_id
+              FROM debt_credit_allocations a
+              LEFT JOIN documents src ON src.id=a.credit_document_id
+              LEFT JOIN documents dst ON dst.id=a.document_id
+              LEFT JOIN branches b ON b.id=a.branch_id
+              WHERE src.id IS NULL OR dst.id IS NULL OR b.id IS NULL
+                 OR src.state<>'posted' OR dst.state<>'posted'
+                 OR src.branch_id<>a.branch_id OR dst.branch_id<>a.branch_id
+                 OR src.party_id<>a.party_id OR dst.party_id<>a.party_id
+                 OR (a.party_type='customer' AND
+                     (src.kind<>'sale_return' OR dst.kind<>'sale'))
+                 OR (a.party_type='supplier' AND
+                     (src.kind<>'purchase_return' OR dst.kind<>'purchase'))
+                 OR src.total_minor<=0 OR dst.total_minor<=0
+                 OR length(trim(a.reason))<12
+            """)
+            check("debt_credit_source_overallocated", """
+              SELECT src.id,src.total_minor,SUM(a.amount_minor) AS allocated_minor
+              FROM documents src
+              JOIN debt_credit_allocations a ON a.credit_document_id=src.id
+              GROUP BY src.id
+              HAVING SUM(a.amount_minor)>src.total_minor
+            """)
+            check("debt_credit_target_overallocated", """
+              SELECT dst.id,dst.total_minor,dst.paid_minor,
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_allocations x
+                  WHERE x.document_id=dst.id),0) +
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_allocation_lines x
+                  WHERE x.document_id=dst.id),0) +
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_credit_allocations x
+                  WHERE x.document_id=dst.id),0) AS applied_minor
+              FROM documents dst
+              WHERE dst.kind IN ('sale','purchase') AND
+                dst.paid_minor +
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_allocations x
+                  WHERE x.document_id=dst.id),0) +
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_allocation_lines x
+                  WHERE x.document_id=dst.id),0) +
+                COALESCE((SELECT SUM(x.amount_minor) FROM debt_credit_allocations x
+                  WHERE x.document_id=dst.id),0)>dst.total_minor
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

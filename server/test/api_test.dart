@@ -177,6 +177,50 @@ void main() {
     expect(stock['cost_minor'],250);
   });
 
+  test('debt statements enforce branch and party scope at HTTP boundary',() async {
+    final admin=await token();
+    final headers={'authorization':'Bearer $admin'};
+    var count=0;
+    Future<Map<String,dynamic>> post(String path,Map<String,dynamic> body) async {
+      final response=await send('POST','/api/v1/$path',body:body,
+        headers:{...headers,
+          'idempotency-key':'debt-statement-test-${count++}-12345678901234'});
+      expect(response.statusCode,201,reason:await response.readAsString());
+      return Map<String,dynamic>.from(jsonDecode(await response.readAsString()) as Map);
+    }
+    final supplier=await post('suppliers',{'name':'مورد الكشف'});
+    final newBranch=await post('branches',{'name':'فرع اختبار','code':'BR58'});
+    final other=newBranch['id'] as String;
+    await post('users',{'branch_id':other,'username':'branch-manager-statement',
+      'password':'long-manager-password-123','role':'manager'});
+    final login=await send('POST','/api/v1/auth/login',body:{
+      'tenant_id':setup['tenant_id'],'username':'branch-manager-statement',
+      'password':'long-manager-password-123'});
+    expect(login.statusCode,200);
+    final manager=(jsonDecode(await login.readAsString()) as Map)['token'] as String;
+    final scoped={'authorization':'Bearer $manager'};
+    final party=supplier['id'];
+    final forbidden=await send('GET',
+      '/api/v1/debts/statement?branch_id=${setup['branch_id']}&party_type=supplier&party_id=$party',
+      headers:scoped);
+    expect(forbidden.statusCode,403);
+    expect((await send('GET',
+      '/api/v1/suppliers?branch_id=${setup['branch_id']}',headers:scoped)).statusCode,403);
+    final permitted=await send('GET',
+      '/api/v1/debts/statement?branch_id=$other&party_type=supplier&party_id=$party',
+      headers:scoped);
+    expect(permitted.statusCode,200);
+    final report=jsonDecode(await permitted.readAsString()) as Map;
+    expect(report['balance_minor'],0);
+    expect(report['entries'],isEmpty);
+    expect((await send('GET',
+      '/api/v1/debts/statement?branch_id=$other&party_type=invalid&party_id=$party',
+      headers:scoped)).statusCode,400);
+    expect((await send('GET',
+      '/api/v1/debts/statement?branch_id=$other&party_type=supplier&party_id=nonexistent',
+      headers:scoped)).statusCode,404);
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

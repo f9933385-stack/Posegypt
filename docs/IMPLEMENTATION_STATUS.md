@@ -67,3 +67,16 @@ covered by expiry, identity-isolation, and restart tests. Cross-host/IP
 rate limiting, monitoring, and penetration testing are **not** implemented.
 This addendum supersedes the earlier login-throttling sentence in the
 initial 2026-11-12 snapshot above; it does not revise the remaining statuses.
+
+
+## Follow-up: invoice-specific debt allocation (schema v11)
+
+Added an explicit one-payment-to-one-invoice allocation table and read
+endpoint; the existing customer/supplier receipt API now accepts an optional
+invoice ID. Checks run inside the original atomic posting transaction and
+respect party, tenant and branch permissions, posted returns, journal balance,
+and request idempotency. The Flutter debts screen can select an invoice.
+Legacy untargeted receipts are **not** guessed into invoices: new targeted
+payments are conservatively blocked until reconciliation. Multi-document
+allocation, historical repair, refund credits after overpayment, and
+cross-host replication remain open commercial gates.

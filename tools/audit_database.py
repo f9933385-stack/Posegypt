@@ -197,6 +197,36 @@ def audit(db_file: str) -> dict:
                  OR (a.party_type='supplier' AND
                        (d.kind<>'purchase' OR p.direction<>'out'))
             """)
+        has_split_allocations = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='debt_allocation_lines'
+        """).fetchone() is not None
+        if has_split_allocations:
+            check("split_allocation_consistency", """
+              SELECT a.id,a.document_id,a.payment_id FROM debt_allocation_lines a
+              LEFT JOIN payments p ON p.id=a.payment_id
+              LEFT JOIN documents d ON d.id=a.document_id
+              LEFT JOIN branches b ON b.id=a.branch_id
+              WHERE p.id IS NULL OR d.id IS NULL OR b.id IS NULL
+                 OR p.document_id IS NOT NULL
+                 OR p.branch_id IS NOT a.branch_id
+                 OR p.party_id IS NOT a.party_id
+                 OR d.branch_id IS NOT a.branch_id
+                 OR d.party_id IS NOT a.party_id
+                 OR d.tenant_id IS NOT b.tenant_id
+                 OR d.state<>'posted'
+                 OR EXISTS(SELECT 1 FROM debt_allocations old
+                           WHERE old.payment_id=a.payment_id)
+                 OR (a.party_type='customer' AND
+                       (d.kind<>'sale' OR p.direction<>'in'))
+                 OR (a.party_type='supplier' AND
+                       (d.kind<>'purchase' OR p.direction<>'out'))
+            """)
+            check("split_payment_amounts", """
+              SELECT p.id,p.amount_minor,SUM(a.amount_minor) AS allocated_minor
+              FROM payments p JOIN debt_allocation_lines a ON a.payment_id=p.id
+              GROUP BY p.id HAVING p.amount_minor<>SUM(a.amount_minor)
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

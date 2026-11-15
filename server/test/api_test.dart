@@ -404,6 +404,63 @@ void main() {
       'approved');
   });
 
+  test('HTTP credit-note application allocates existing return value without new journal entries',() async {
+    final admin=await token();
+    var counter=0;
+    Future<Map<String,dynamic>> post(String route,Map<String,dynamic> body,
+        {String? key}) async {
+      final response=await send('POST','/api/v1/$route',body:body,
+        headers:{'authorization':'Bearer $admin','idempotency-key':
+          key ?? 'http-credit-application-${counter++}-unique-key'});
+      final raw=await response.readAsString();
+      expect(response.statusCode,201,reason:raw);
+      return Map<String,dynamic>.from(jsonDecode(raw) as Map);
+    }
+    final supplier=await post('suppliers',{'name':'مورد رصيد المرتجع'});
+    final product=await post('products',{'sku':'HTTP-CREDIT-1',
+      'name_ar':'صنف رصيد','sell_price_minor':800});
+    final original=await post('purchases',{'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':2000,
+        'unit_cost_minor':500}],
+      'payments':[{'method':'cash','amount_minor':1000}]});
+    final line=store.first('SELECT id FROM document_lines WHERE document_id=?',
+      [original['id']])!;
+    final returned=await post('purchases/returns',{
+      'branch_id':setup['branch_id'],'original_id':original['id'],
+      'refund_method':'credit',
+      'lines':[{'original_line_id':line['id'],'qty_milli':1000}]});
+    final next=await post('purchases',{'branch_id':setup['branch_id'],
+      'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':2000,
+        'unit_cost_minor':400}],'payments':<Map<String,dynamic>>[]});
+    final auth={'authorization':'Bearer $admin'};
+    final url='/api/v1/debts/invoices?branch_id=${setup['branch_id']}'
+      '&party_type=supplier&party_id=${supplier['id']}';
+    final before=await send('GET',url,headers:auth);
+    final initial=jsonDecode(await before.readAsString()) as Map;
+    expect(initial['available_credit_minor'],500);
+    expect((initial['credit_notes'] as List).single['available_minor'],500);
+    final journalCount=store.rows('SELECT id FROM journal_entries').length;
+    final body=<String,dynamic>{
+      'branch_id':setup['branch_id'],'party_type':'supplier',
+      'party_id':supplier['id'],'credit_document_id':returned['id'],
+      'invoice_id':next['id'],'amount_minor':500,
+      'reason':'تم اعتماد إشعار المورد وربطه بالفاتورة',
+    };
+    const key='http-credit-application-idempotent-12345';
+    final first=await post('debts/credits/apply',body,key:key);
+    expect(await post('debts/credits/apply',body,key:key),first);
+    expect(first['credit_remaining_minor'],0);
+    expect(first['invoice_remaining_minor'],300);
+    expect(store.rows('SELECT id FROM journal_entries'),hasLength(journalCount));
+    final after=await send('GET',url,headers:auth);
+    final finalData=jsonDecode(await after.readAsString()) as Map;
+    expect(finalData['available_credit_minor'],0);
+    expect((finalData['invoices'] as List).single['remaining_minor'],300);
+    expect(store.rows('SELECT * FROM debt_credit_allocations'),hasLength(1));
+  });
+
   test('oversized JSON requests are rejected without buffering indefinitely',() async {
     final tooLarge={'unused':List<String>.filled(140000,'x').join()};
     final response=await send('POST','/api/v1/auth/login',body:tooLarge);

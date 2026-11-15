@@ -380,3 +380,23 @@ const schemaV10 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_login_attempt_limits_window
     ON login_attempt_limits(window_started_at)'''
 ];
+
+
+/// V11: explicit, immutable one-invoice settlement links.
+/// Previously posted unallocated receipts cannot be safely inferred.
+const schemaV11 = <String>[
+  '''CREATE TABLE IF NOT EXISTS debt_allocations (
+    id TEXT PRIMARY KEY,
+    payment_id TEXT NOT NULL UNIQUE REFERENCES payments(id),
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    party_id TEXT NOT NULL,
+    party_type TEXT NOT NULL CHECK(party_type IN ('customer','supplier')),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    created_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_allocations_doc
+    ON debt_allocations(document_id,created_at)''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_allocations_party
+    ON debt_allocations(branch_id,party_id,party_type)'''
+];

@@ -168,6 +168,9 @@ class PosEngine {
       case 'purchase_return': return _purchaseReturn(p,input);
       case 'customer_receipt': return _settle(p,input,customer:true);
       case 'supplier_payment': return _settle(p,input,customer:false);
+      case 'debt_reconciliation_request': return _requestDebtReconciliation(p,input);
+      case 'debt_reconciliation_approve': return _reviewDebtReconciliation(p,input,approve:true);
+      case 'debt_reconciliation_reject': return _reviewDebtReconciliation(p,input,approve:false);
       case 'expense': return _expense(p,input);
       case 'count_open': return _openCount(p,input);
       case 'count_line': return _recordCountLine(p,input);

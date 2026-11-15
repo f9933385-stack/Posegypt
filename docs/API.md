@@ -437,3 +437,48 @@ Not implemented: central safe/cash-vault transfers, bank deposits,
 cross-branch transfers, physical banknote reconciliation or third-party
 cash drawer hardware integration. See
 [Arabic operating guide](CASH_DRAWER_TRANSFERS_AR.md).
+
+
+## Branch cash safe and independently accepted safe drops (schema v17)
+
+An opt-in physical **branch safe** tracks cash already held within the
+same branch. It is **not a bank account** and does not represent a new
+CASH general-ledger movement or a second receipt.
+
+- `GET /api/v1/shifts/safe?branch_id=...`: returns a safe record
+  and `balance_minor` (sum of approved safe drops), or
+  `{registered:false,branch_id,balance_minor:0}` when no safe exists.
+- `POST /api/v1/shifts/safe`: owner/manager only, accepts
+  `{branch_id,name}` (name 1–60 chars). Requires independent
+  cash drawers already registered in that branch. One safe per
+  branch, with **zero** initial credited physical cash.
+- `GET /api/v1/shifts/safe/drops?branch_id=...`: latest 200 safe
+  drop requests; owner/manager can review the branch, while
+  cashiers/purchasing users only see their own requests.
+- `POST /api/v1/shifts/safe/drops`: authenticated active
+  drawer-shift owner requests `{branch_id,source_shift_id,
+  amount_minor,reason}` (positive integer minor currency units,
+  minimum 12-character reason). A pending proposal changes no
+  balances. Amount must fit sender's current expected drawer cash.
+- `POST /api/v1/shifts/safe/drops/approve`: an **independent
+  owner/manager**, never the original sender, approves physical
+  receipt with `{drop_id,reason}`. Revalidates branch, actor,
+  open source shift and current available amount in the same
+  transaction. Approval reduces source shift expectation
+  and increases branch safe balance by identical amounts.
+- `POST /api/v1/shifts/safe/drops/reject`: independent
+  owner/manager rejection, no balance effect.
+- `POST /api/v1/shifts/safe/drops/cancel`: original sender
+  cancellation, no balance effect.
+
+All writes require a unique HTTP `Idempotency-Key` and create
+audit/outbox records. An open source shift cannot close until all
+of its pending safe drops are reviewed or cancelled. No new
+general-ledger CASH entry, receipt, withdrawal, stock event or
+tax document is posted for safe handovers; the cash remains
+within the company.
+
+**Limitations:** No safe opening float booking, vault withdrawal,
+bank deposit, bank statement reconciliation, physically verified
+vault count or cross-server cash handover. See
+[the Arabic operator guide](BRANCH_CASH_SAFE_AR.md).

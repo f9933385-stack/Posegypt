@@ -184,3 +184,24 @@ This is branch-local physical cash attribution only, not a
 cash vault, bank-deposit posting or cross-host synchronization.
 Tests cover domain/API authorization, approval, cancellation,
 amount limits, replay safety, journal invariance and v15 migration.
+
+
+## Branch-local cash safe — v17
+
+Added `cash_safes` (one optional zero-opening safe per
+independent-drawer branch) and `cash_safe_drops` with
+`pending/approved/rejected/cancelled` lifecycle. An active
+drawer operator proposes a physical drop; a *different*
+authorized owner/manager confirms physical receipt. Only
+approved drops reduce sender shift expected cash and increase
+safe expected balance. Pending proposals block shift closure;
+reject/cancel do not move anything. Rechecks at approval
+prevent stale/overdrawn requests. Each command is idempotent,
+audit-traced and queued in the branch outbox; no extra CASH
+general-ledger posting occurs.
+
+Added scoped GET/POST API, Flutter safe drop interface,
+migration from v16, domain and API coverage, and Python
+read-only financial custody audit. This milestone is not
+bank deposits, treasury withdrawals, inventory sync,
+hardware certification or complete production accounting.

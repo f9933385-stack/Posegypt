@@ -163,3 +163,24 @@ This is NOT a complete cash management suite. There is still no
 cash transfer between drawers, safe-drop/bank deposit, float issue
 workflow, second-person count sign-off or certified physical
 cash drawer integration.
+
+
+## v16: independently accepted cash-drawer handovers
+
+Added additive `cash_drawer_transfers` with `pending`,
+`approved`, `rejected`, `cancelled` lifecycle. A sender
+with an open, active branch drawer shift may propose a transfer;
+only the receiving shift's distinct authenticated operator can
+approve or reject it, with documented reason. The sender may
+cancel a pending proposal. No proposed/rejected/cancelled amount
+changes balances; approved amounts reduce the sender's shift
+expectation and increase the recipient's by the same amount.
+The operation intentionally posts no general-ledger CASH entry.
+
+Both shifts must remain open for approval; closing is blocked
+until pending handovers have been reviewed. Approval rechecks
+source cash availability to prevent committing stale promises.
+This is branch-local physical cash attribution only, not a
+cash vault, bank-deposit posting or cross-host synchronization.
+Tests cover domain/API authorization, approval, cancellation,
+amount limits, replay safety, journal invariance and v15 migration.

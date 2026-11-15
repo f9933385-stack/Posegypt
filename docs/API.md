@@ -276,3 +276,43 @@ targeted allocations pending human reconciliation. This workflow does not
 auto-allocate oldest invoices, net returns that over-credit prior payments,
 or reconcile historical unallocated receipts. The Flutter form supports
 manual split input across at most 20 of the currently displayed invoices.
+
+
+## Reviewable reconciliation of legacy account payments (schema v13)
+
+Historical account-wide receipts/supplier payments **without a document ID or
+allocation** can be matched to invoices, but only with independent review.
+This is a **linking-only** operation: no new cash payment, journal entry,
+or modification of original receipts is created.
+
+Owner/manager scoped reads:
+- `GET /api/v1/debts/unallocated?branch_id=...&party_id=...&party_type=customer|supplier` lists up to 200 unmatched original payments with a pending request ID if any.
+- `GET /api/v1/debts/reconciliations?branch_id=...&party_id=...&party_type=customer|supplier` lists recent requests, their proposed invoice lines, requester, and review outcome.
+
+Owner/manager state-changing actions each require a unique
+`Idempotency-Key`:
+- `POST /api/v1/debts/reconciliations`: `branch_id`,
+  `party_id`, `party_type`, `payment_id`,
+  `reason` (12–1000 characters) and
+  `allocations: [{invoice_id,amount_minor},...]` (1–20 unique documents,
+  exact full amount of original payment).
+- `POST /api/v1/debts/reconciliations/approve`: `reconciliation_id`
+  and `reason` (12–1000 characters); only a **different** authorized
+  owner/manager may approve, and all invoice balances and original
+  payment/journal checks are rerun inside the approval transaction.
+- `POST /api/v1/debts/reconciliations/reject`: same fields; closes
+  a pending request so a new corrected proposal can be made.
+
+A request stores immutable proposal lines and audit records. On approval,
+only `debt_allocation_lines` is augmented with links back to the
+**pre-existing** payment ID. The legacy amount stops blocking targeted
+payments only after **all** unmatched payments for that party and
+branch are reconciled. Rejected requests never allocate invoices.
+Cross-tenant/branch/party mismatches, duplicate invoices,
+stale returns, over-allocation and self-review are rejected.
+
+Do not infer that a payment belongs to an invoice without original
+bank/cashier documentation. This is a conservative, manual workflow and
+does not support split approvals by one employee, chargebacks,
+overpayment credit settlement, or cross-host reconciliation.
+See [Arabic workflow](LEGACY_DEBT_RECONCILIATION_AR.md).

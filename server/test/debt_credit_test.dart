@@ -137,6 +137,73 @@ void main() {
       HAVING SUM(l.debit_minor-l.credit_minor)<>0'''),isEmpty);
   });
 
+  test('unallocated old receipts block credit application until maker-checker reconciliation',() {
+    final product=call('create_product',{
+      'sku':'CREDIT-LEGACY-1','name_ar':'صنف تسوية',
+      'sell_price_minor':500});
+    final supplier=call('create_supplier',{'name':'مورد التسوية'});
+    final customer=call('create_customer',{
+      'name':'عميل التسوية','credit_limit_minor':3000});
+    call('purchase',{'branch_id':branch,'supplier_id':supplier['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':10000,
+        'unit_cost_minor':100}],'payments':<Map<String,dynamic>>[]});
+    final settledSale=call('sale',{'branch_id':branch,
+      'customer_id':customer['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1000}],
+      'payments':[{'method':'cash','amount_minor':500}]});
+    final settledLine=store.first('SELECT id FROM document_lines WHERE document_id=?',
+      [settledSale['id']])!;
+    final creditReturn=call('sale_return',{'branch_id':branch,
+      'original_id':settledSale['id'],'refund_method':'credit',
+      'lines':[{'original_line_id':settledLine['id'],'qty_milli':1000}]});
+    final openSale=call('sale',{'branch_id':branch,
+      'customer_id':customer['id'],
+      'lines':[{'product_id':product['id'],'qty_milli':1600}],
+      'payments':<Map<String,dynamic>>[]});
+    final oldReceipt=call('customer_receipt',{'branch_id':branch,
+      'customer_id':customer['id'],'amount_minor':100,'method':'bank'});
+    final report=engine.listDebtInvoices(owner,branch,
+      customer['id'] as String,customer:true);
+    expect(report['available_credit_minor'],500);
+    expect(report['unallocated_settlements_minor'],100);
+    expect(report['allocation_available'],false);
+    final application=<String,dynamic>{
+      'branch_id':branch,'party_type':'customer','party_id':customer['id'],
+      'credit_document_id':creditReturn['id'],'invoice_id':openSale['id'],
+      'amount_minor':500,'reason':'تطبيق رصيد بعد مطابقة الإيصال القديم',
+    };
+    expect(()=>call('debt_credit_apply',application),
+      throwsA(isA<DomainError>().having((e)=>e.status,'status',409)));
+    expect(store.rows('SELECT * FROM debt_credit_allocations WHERE credit_document_id=?',
+      [creditReturn['id']]),isEmpty);
+
+    final managerData=call('create_user',{'username':'credit-reviewer',
+      'password':'credit-reviewer-password-123','role':'manager',
+      'branch_id':branch});
+    final reviewer=Principal(managerData['id'] as String,owner.tenantId,
+      branch,'manager','credit-reviewer');
+    final request=call('debt_reconciliation_request',{
+      'branch_id':branch,'party_type':'customer','party_id':customer['id'],
+      'payment_id':oldReceipt['id'],
+      'reason':'إيصال البنك القديم تمت مراجعته مع كشف الحساب',
+      'allocations':[{'invoice_id':openSale['id'],'amount_minor':100}],
+    });
+    final approved=engine.command(reviewer,'debt_reconciliation_approve',{
+      'reconciliation_id':request['id'],
+      'reason':'تمت مطابقة الإيصال مع المستند البنكي الأصلي'},
+      'credit-review-approve-legacy-receipt-123456');
+    expect(approved['status'],'approved');
+    final ready=engine.listDebtInvoices(owner,branch,
+      customer['id'] as String,customer:true);
+    expect(ready['allocation_available'],true);
+    expect((ready['invoices'] as List<Map<String,Object?>>)
+      .single['remaining_minor'],700);
+    final applied=call('debt_credit_apply',application);
+    expect(applied['credit_remaining_minor'],0);
+    expect(applied['invoice_remaining_minor'],200);
+    expect(engine.dashboard(owner,branch)['customer_receivables_minor'],200);
+  });
+
   test('credit application rejects wrong parties, cash refunds, stale targets and excess amounts atomically',() {
     final product=call('create_product',{
       'sku':'CREDIT-GUARD-1','name_ar':'منتج حراسة',

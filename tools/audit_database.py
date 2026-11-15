@@ -174,6 +174,29 @@ def audit(db_file: str) -> dict:
                     FROM journal_lines WHERE account='IN_TRANSIT'),0) AS ledger_minor
               ) WHERE expected_minor<>ledger_minor
             """)
+        has_allocations = con.execute("""
+          SELECT 1 FROM sqlite_master WHERE type='table' AND name='debt_allocations'
+        """).fetchone() is not None
+        if has_allocations:
+            check("invoice_allocation_consistency", """
+              SELECT a.id,a.document_id,a.payment_id FROM debt_allocations a
+              LEFT JOIN payments p ON p.id=a.payment_id
+              LEFT JOIN documents d ON d.id=a.document_id
+              LEFT JOIN branches b ON b.id=a.branch_id
+              WHERE p.id IS NULL OR d.id IS NULL OR b.id IS NULL
+                 OR a.amount_minor<>p.amount_minor
+                 OR p.document_id IS NOT NULL
+                 OR p.branch_id IS NOT a.branch_id
+                 OR p.party_id IS NOT a.party_id
+                 OR d.branch_id IS NOT a.branch_id
+                 OR d.party_id IS NOT a.party_id
+                 OR d.tenant_id IS NOT b.tenant_id
+                 OR d.state<>'posted'
+                 OR (a.party_type='customer' AND
+                       (d.kind<>'sale' OR p.direction<>'in'))
+                 OR (a.party_type='supplier' AND
+                       (d.kind<>'purchase' OR p.direction<>'out'))
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

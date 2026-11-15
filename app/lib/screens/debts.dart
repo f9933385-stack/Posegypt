@@ -14,6 +14,7 @@ class _DebtsState extends State<DebtsPage> {
   String? partyId;
   String method='cash';
   String? invoiceId;
+  List<Map<String,dynamic>> splitAllocations=[];
   Future<Map<String,dynamic>>? invoiceInfo;
   final amount=TextEditingController();
   late Future<List<Map<String,dynamic>>> parties;
@@ -24,6 +25,7 @@ class _DebtsState extends State<DebtsPage> {
     final id=partyId;
     setState((){
       invoiceId=null;
+      splitAllocations=[];
       invoiceInfo=id==null?null:widget.api.get('debts/invoices',{
         'branch_id':widget.branchId,'party_id':id,
         'party_type':customer?'customer':'supplier'});
@@ -37,12 +39,83 @@ class _DebtsState extends State<DebtsPage> {
       final result=await widget.api.post(customer?'customers/receipts':'suppliers/payments',{
         'branch_id':widget.branchId,(customer?'customer_id':'supplier_id'):partyId,
         'amount_minor':parseMoney(amount.text),'method':method,
-        if(invoiceId!=null) 'invoice_id':invoiceId});
+        if(invoiceId!=null) 'invoice_id':invoiceId,
+        if(splitAllocations.isNotEmpty) 'allocations':splitAllocations});
       if(!mounted)return;
       alert(context,'تم تسجيل الحركة. الرصيد المتبقي: ${money(asInt(result['remaining_minor']))}');
       amount.clear();_reload();_loadInvoices();
     }catch(e){alert(context,'تعذر تسجيل الحركة: $e',error:true);}
     finally{if(mounted)setState(()=>saving=false);}
+  }
+  Future<void> _splitPayment(List<Map<String,dynamic>> invoices) async {
+    final selectable=invoices.take(20).toList();
+    final controllers=[
+      for(final _ in selectable) TextEditingController(),
+    ];
+    String? validationError;
+    try {
+      final result=await showDialog<List<Map<String,dynamic>>>(
+        context:context,builder:(ctx)=>StatefulBuilder(
+        builder:(ctx,update)=>AlertDialog(
+          title:const Text('توزيع دفعة على فواتير متعددة'),
+          content:SizedBox(width:580,height:440,
+            child:Column(children:[
+              const Text('أدخل المبلغ بالجنيه أمام كل فاتورة ترغب في سداد جزء منها. '
+                'اترك الباقي فارغًا. الحد الأقصى 20 فاتورة.'),
+              if(validationError!=null) ...[
+                const SizedBox(height:8),
+                Text(validationError!,style:TextStyle(
+                  color:Theme.of(ctx).colorScheme.error)),
+              ],
+              const SizedBox(height:8),
+              Expanded(child:ListView.builder(itemCount:selectable.length,
+                itemBuilder:(ctx,i) {
+                  final item=selectable[i];
+                  return Padding(padding:const EdgeInsets.only(bottom:10),
+                    child:TextField(
+                      controller:controllers[i],
+                      keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                      decoration:InputDecoration(
+                        border:const OutlineInputBorder(),
+                        labelText:'فاتورة ${item['number']}',
+                        helperText:'المتبقي: ${money(asInt(item['remaining_minor']))}',
+                      )));
+                })),
+            ])),
+          actions:[
+            TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('إلغاء')),
+            FilledButton(onPressed:(){
+              try {
+                final chosen=<Map<String,dynamic>>[];
+                for(var i=0;i<selectable.length;i++) {
+                  if(controllers[i].text.trim().isEmpty) continue;
+                  final minor=parseMoney(controllers[i].text);
+                  if(minor<=0 || minor>asInt(selectable[i]['remaining_minor'])) {
+                    throw const FormatException('أحد المبالغ يتجاوز رصيد الفاتورة أو يساوي صفرًا');
+                  }
+                  chosen.add({
+                    'invoice_id':selectable[i]['id'].toString(),
+                    'amount_minor':minor,
+                  });
+                }
+                if(chosen.length<2) {
+                  throw const FormatException('اختر فاتورتين على الأقل، أو استخدم خيار الفاتورة الواحدة');
+                }
+                Navigator.pop(ctx,chosen);
+              }catch(e){update(()=>validationError=e.toString());}
+            },child:const Text('تطبيق التوزيع')),
+          ],
+        )));
+      if(result==null || !mounted) return;
+      final total=result.fold<int>(0,(sum,row)=>sum+asInt(row['amount_minor']));
+      setState((){
+        invoiceId=null;
+        splitAllocations=result;
+        amount.text='${total~/100}.${(total%100).toString().padLeft(2,'0')}';
+      });
+    }finally{
+      for(final controller in controllers){controller.dispose();}
+    }
   }
   Future<void> _statement() async {
     if(partyId==null) return;
@@ -83,7 +156,8 @@ class _DebtsState extends State<DebtsPage> {
       const SectionTitle('التحصيلات وسداد الموردين',subtitle:'تسويات الديون تؤثر على الحساب النقدي والمديونية فقط، وليس الربح.'),
       SegmentedButton<bool>(segments:const [ButtonSegment(value:true,label:Text('تحصيل من عميل')),
         ButtonSegment(value:false,label:Text('سداد لمورد'))],selected:{customer},onSelectionChanged:(value){
-          setState(() {customer=value.first;partyId=null;invoiceId=null;invoiceInfo=null;});_reload();}),
+          setState(() {customer=value.first;partyId=null;invoiceId=null;
+            splitAllocations=[];invoiceInfo=null;});_reload();}),
       const SizedBox(height:12),AsyncPanel<List<Map<String,dynamic>>>(future:parties,onRetry:_reload,
         builder:(list)=>DropdownButtonFormField<String>(value:partyId,
           decoration:InputDecoration(labelText:customer?'العميل':'المورد'),
@@ -118,7 +192,21 @@ class _DebtsState extends State<DebtsPage> {
                       child:Text('${item['number']} • المتبقي: ${money(asInt(item['remaining_minor']))}',
                         overflow:TextOverflow.ellipsis)),
                 ],
-                onChanged:(v)=>setState(()=>invoiceId=v==null || v.isEmpty?null:v)),
+                onChanged:(v)=>setState((){
+                  invoiceId=v==null || v.isEmpty?null:v;
+                  splitAllocations=[];
+                })),
+              if(data['allocation_available']==true && invoices.length>=2) ...[
+                const SizedBox(height:8),
+                OutlinedButton.icon(
+                  onPressed:saving?null:()=>_splitPayment(invoices),
+                  icon:const Icon(Icons.call_split),
+                  label:const Text('توزيع المبلغ على عدة فواتير')),
+              ],
+              if(splitAllocations.isNotEmpty) Padding(
+                padding:const EdgeInsets.only(top:8),
+                child:Text('تم اختيار ${splitAllocations.length} فواتير. '
+                  'مجموع المبالغ سيطابق قيمة السداد المدخلة.')),
               if(data['has_more']==true)
                 const Text('هناك فواتير أخرى غير ظاهرة، استخدم كشف الحساب للمراجعة.'),
             ]);

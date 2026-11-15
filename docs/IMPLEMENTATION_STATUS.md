@@ -95,3 +95,22 @@ broken sum-to-payment or mismatched party/document links.
 Still unresolved: legacy unallocated receipt reconciliation, automatic
 FIFO allocation, post-settlement return overcredits, cloud branch sync,
 and release certification.
+
+
+## Legacy debt reconciliation: maker-checker stage v13
+
+Added additive `debt_reconciliations` and
+`debt_reconciliation_lines` tables and three idempotent
+commands to propose, independently approve or reject manual matches
+of old unallocated customer/supplier settlements. Approved requests
+create invoice-allocation links referring to the **original**
+payment row; no second cash or journal post occurs. Journal
+validation, party/branch role checks, reasons, revalidation after
+return changes and independent reviewer checks are covered by
+tests. A manager-only Flutter reconciliation dialog lists old
+payments, supports invoice allocation proposals, and displays
+pending/approved/rejected decisions.
+
+Separate financial-system sign-off, old bank document review,
+overpaid returns, cloud sync and physical device certification
+remain unresolved commercial gates.

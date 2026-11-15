@@ -177,7 +177,7 @@ class _CashTransfersSectionState extends State<CashTransfersSection> {
         final source=own.isEmpty?null:own.first;
         final destinations=drawers.where((x)=>
           x['open_shift_id']!=null &&
-          x['open_shift_id']!=source?['id'] &&
+          (source==null || x['open_shift_id']!=source['id']) &&
           x['active']==1).toList();
         final outstanding=transfers.where((x)=>x['status']=='pending').toList();
         return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[

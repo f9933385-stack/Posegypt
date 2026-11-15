@@ -1078,6 +1078,9 @@ class PosEngine {
     final customer=type=='customer';
     final party=nonEmpty(input['party_id'],'party_id');
     _party(customer?'customers':'suppliers',p,party);
+    if(_unallocatedSettlements(branch,party,customer:customer)>0) {
+      throw DomainError('Legacy unallocated payments must be reconciled before applying credit notes',409);
+    }
     final creditId=nonEmpty(input['credit_document_id'],'credit_document_id');
     final invoiceId=nonEmpty(input['invoice_id'],'invoice_id');
     final amount=strictInt(input['amount_minor'],'amount_minor',min:1);

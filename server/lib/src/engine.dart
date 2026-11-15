@@ -2108,6 +2108,10 @@ class PosEngine {
     if(safe==null) {
       return {'registered':false,'branch_id':branch,'balance_minor':0};
     }
+    if(p.role=='cashier' || p.role=='purchasing') {
+      return {'id':safe['id'],'name':safe['name'],
+        'registered':true,'branch_id':branch};
+    }
     return {...safe,'registered':true,
       'balance_minor':_safeBalance(safe['id'] as String)};
   }

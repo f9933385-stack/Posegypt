@@ -51,6 +51,7 @@ void main() {
     expect(oldInvoice['return_credit_minor'],200);
     expect(oldInvoice['remaining_minor'],0);
     expect(first['available_credit_minor'],300);
+    expect(engine.dashboard(owner,branch)['customer_credit_balances_minor'],300);
     expect((first['credit_notes'] as List<Map<String,Object?>>)
       .single['available_minor'],300);
 
@@ -104,6 +105,7 @@ void main() {
       'original_id':original['id'],'refund_method':'credit',
       'lines':[{'original_line_id':originalLine['id'],'qty_milli':1000}]});
     expect(returned['supplier_credit_minor'],500);
+    expect(engine.dashboard(owner,branch)['supplier_credit_balances_minor'],500);
     final creditId=store.first('''SELECT id FROM documents
       WHERE original_id=? AND kind='purchase_return' ORDER BY created_at DESC LIMIT 1''',
       [original['id']])!['id'] as String;

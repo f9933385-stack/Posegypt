@@ -351,3 +351,46 @@ materializes the portion that previously reduced the original invoice
 as an explicit allocation; the excess is retained as an available
 credit note. Original documents, payment rows and journals are not
 rewritten. See [Arabic operator guide](RETURN_CREDIT_APPLICATION_AR.md).
+
+
+## Independent cash drawers and shift-specific cash attribution (schema v15)
+
+By default, upgraded branches retain the earlier **single shared branch shift**
+behaviour. Creating the **first** drawer permanently opts that branch into
+independent drawer mode; the shared shift must be closed first.
+
+- `GET /api/v1/shifts/drawers?branch_id=...` returns registered drawer IDs,
+  names, active flags, and current open-shift IDs for owner/manager/cashier.
+- `POST /api/v1/shifts/drawers` (owner/manager, idempotent) accepts
+  `{branch_id,name}` (maximum 32 drawers per branch; names unique).
+- `POST /api/v1/shifts/open` accepts `{branch_id,opening_minor,
+  cash_drawer_id}` in independent mode; cashier/manager/owner opens
+  a shift as themselves on an available active drawer. One active shift
+  per drawer and operator is enforced by SQLite partial unique indexes.
+- `GET /api/v1/shifts?branch_id=...` additionally returns
+  `drawer_id`, `drawer_name`, and `operator_name`.
+  Cashiers see only their shifts and never the expected amount on an open
+  shift.
+- `POST /api/v1/shifts/close` accepts `{branch_id,shift_id,
+  closing_actual_minor}`; if a manager/owner closes another operator's
+  independent-drawer shift, `override_reason` of 12–500 characters is
+  mandatory and audited.
+
+On every **CASH** journal posting after drawer activation, the server looks
+up the authenticated actor's **own one open drawer shift**. If none exists,
+it rejects the entire transaction (including the sale/document/stock
+posting); it never guesses the till or silently attributes a sale to
+another employee. The exact signed `CASH` delta from the balanced
+journal is linked to that shift via `cash_shift_journal_links`. Cash
+closing is the shift's opening physical float plus these linked ledger
+deltas, excluding another employee's cash and all noncash card/bank/
+wallet payments. Discrepancies are logged but not booked to the ledger
+without independent approval.
+
+Branches that never register drawers continue to support one branch-wide
+shift without forcing new POS field entry. There is no cash float
+transfer between drawers, hardware door/coin control, double-count
+handoff, cash deposit journal workflow, or shared cashier session
+identity; cash transactions without an actor's open drawer shift are
+blocked once independent drawers are enabled. See
+[Arabic operator guide](MULTI_CASH_DRAWERS_AR.md).

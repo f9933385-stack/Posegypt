@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import '../services/api.dart';
 import '../models/formats.dart';
 import '../widgets/common.dart';
+import 'debt_reconciliations.dart';
 
 class DebtsPage extends StatefulWidget {
   final ApiClient api;
   final String branchId;
-  const DebtsPage({super.key,required this.api,required this.branchId});
+  final String role;
+  const DebtsPage({super.key,required this.api,required this.branchId,
+    required this.role});
   @override State<DebtsPage> createState()=>_DebtsState();
 }
 class _DebtsState extends State<DebtsPage> {
@@ -117,6 +120,13 @@ class _DebtsState extends State<DebtsPage> {
       for(final controller in controllers){controller.dispose();}
     }
   }
+  Future<void> _reconcileLegacy() async {
+    if(partyId==null)return;
+    await showDialog<void>(context:context,builder:(_)=>
+      DebtReconciliationDialog(api:widget.api,branchId:widget.branchId,
+        partyId:partyId!,customer:customer));
+    if(mounted){_reload();_loadInvoices();}
+  }
   Future<void> _statement() async {
     if(partyId==null) return;
     try {
@@ -176,10 +186,17 @@ class _DebtsState extends State<DebtsPage> {
             final invoices=(data['invoices'] as List<dynamic>)
               .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
             return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-              if(legacy>0) Text(
-                'يوجد تحصيل/سداد قديم بقيمة ${money(legacy)} بدون توزيع على الفواتير؛ '
-                'يلزم مطابقته أولًا قبل ربط دفعات جديدة بفواتير محددة.',
-                style:TextStyle(color:Theme.of(context).colorScheme.error)),
+              if(legacy>0) ...[
+                Text('يوجد تحصيل/سداد قديم بقيمة ${money(legacy)} بدون توزيع على الفواتير؛ '
+                  'يلزم مطابقته أولًا قبل ربط دفعات جديدة بفواتير محددة.',
+                  style:TextStyle(color:Theme.of(context).colorScheme.error)),
+                if(widget.role=='owner' || widget.role=='manager') ...[
+                  const SizedBox(height:8),
+                  OutlinedButton.icon(onPressed:saving?null:_reconcileLegacy,
+                    icon:const Icon(Icons.fact_check_outlined),
+                    label:const Text('مطابقة الدفعات القديمة ومراجعتها')),
+                ],
+              ],
               DropdownButtonFormField<String>(
                 value:invoiceId,
                 decoration:const InputDecoration(labelText:'تخصيص السداد لفاتورة (اختياري)'),

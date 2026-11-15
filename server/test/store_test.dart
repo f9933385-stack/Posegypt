@@ -17,11 +17,11 @@ void main() {
 
   test('initial migration and reopen are idempotent', () {
     final first=DatabaseStore.open(path);
-    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 13);
+    expect(first.first('SELECT MAX(version) AS v FROM schema_version')?['v'], 14);
     expect(first.first("SELECT name FROM sqlite_master WHERE name='products'")?['name'], 'products');
     first.dispose();
     final second=DatabaseStore.open(path);
-    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 13);
+    expect(second.first('SELECT COUNT(*) AS n FROM schema_version')?['n'], 14);
     second.dispose();
   });
 
@@ -39,7 +39,7 @@ void main() {
     }
     final migrated=DatabaseStore.open(path);
     try {
-      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],13);
+      expect(migrated.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
       expect(migrated.first("SELECT name_ar FROM products WHERE id='P'")?['name_ar'],'Old Product');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='product_units'")?['name'],
         'product_units');
@@ -59,6 +59,7 @@ void main() {
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='debt_allocation_lines'")?['name'],'debt_allocation_lines');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='debt_reconciliations'")?['name'],'debt_reconciliations');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='debt_reconciliation_lines'")?['name'],'debt_reconciliation_lines');
+      expect(migrated.first("SELECT name FROM sqlite_master WHERE name='debt_credit_allocations'")?['name'],'debt_credit_allocations');
       expect(migrated.first("SELECT name FROM sqlite_master WHERE name='license_clock_guards'")?['name'],'license_clock_guards');
       expect(migrated.rows('PRAGMA table_info(sessions)').any((x)=>x['name']=='device_id'),isTrue);
     } finally {
@@ -110,7 +111,7 @@ void main() {
     } finally {upgraded.dispose();}
   });
 
-  test('v12 distributed payments survive v13 migration with original journal', () {
+  test('v12 distributed payments survive v13/v14 migrations with original journal', () {
     final raw=sqlite3.open(path);
     try {
       raw.execute('PRAGMA foreign_keys=ON');
@@ -167,8 +168,82 @@ void main() {
       expect(upgraded.first("SELECT SUM(debit_minor-credit_minor) AS balance FROM journal_lines WHERE entry_id='J'")?['balance'],0);
       expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_reconciliations'")?['name'],
         'debt_reconciliations');
+      expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_credit_allocations'")?['name'],
+        'debt_credit_allocations');
       expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
     }finally{upgraded.dispose();}
+  });
+
+  test('v13 migration backfills return credit to original invoice and preserves excess', () {
+    final raw=sqlite3.open(path);
+    try {
+      raw.execute('PRAGMA foreign_keys=ON');
+      for(final migration in [
+        schemaV1,schemaV2,schemaV3,schemaV4,schemaV5,schemaV6,
+        schemaV7,schemaV8,schemaV9,schemaV10,schemaV11,schemaV12,schemaV13
+      ]) {
+        for(final statement in migration) {raw.execute(statement);}
+      }
+      raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      for(var version=1;version<=13;version++) {
+        raw.execute('INSERT INTO schema_version(version) VALUES(?)',[version]);
+      }
+      raw.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Tenant','now')");
+      raw.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B','T','BR01','Branch','now')");
+      raw.execute("INSERT INTO warehouses(id,branch_id,name,is_default) VALUES('W','B','Main',1)");
+      raw.execute("""INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at)
+        VALUES('U','T','B','admin','salt','hash','owner','now')""");
+      raw.execute("INSERT INTO customers(id,tenant_id,name,created_at) VALUES('C','T','Customer','now')");
+      raw.execute("""INSERT INTO documents(
+        id,tenant_id,branch_id,warehouse_id,kind,number,party_id,
+        subtotal_minor,discount_minor,tax_minor,total_minor,paid_minor,
+        cost_minor,snapshot_json,created_by,created_at)
+        VALUES('SALE','T','B','W','sale','SAL-001','C',
+          1000,0,0,1000,800,0,'{}','U','2026-01-01')""");
+      raw.execute("""INSERT INTO documents(
+        id,tenant_id,branch_id,warehouse_id,kind,number,party_id,original_id,
+        subtotal_minor,discount_minor,tax_minor,total_minor,paid_minor,
+        cost_minor,snapshot_json,created_by,created_at)
+        VALUES('RET1','T','B','W','sale_return','RET-001','C','SALE',
+          500,0,0,500,0,0,'{"refund_method":"credit"}','U','2026-01-02')""");
+      raw.execute("""INSERT INTO documents(
+        id,tenant_id,branch_id,warehouse_id,kind,number,party_id,original_id,
+        subtotal_minor,discount_minor,tax_minor,total_minor,paid_minor,
+        cost_minor,snapshot_json,created_by,created_at)
+        VALUES('RET2','T','B','W','sale_return','RET-002','C','SALE',
+          200,0,0,200,0,0,'{"refund_method":"credit"}','U','2026-01-03')""");
+      raw.execute("""INSERT INTO payments(
+        id,branch_id,party_id,method,direction,amount_minor,created_at)
+        VALUES('PAY','B','C','cash','in',100,'2026-01-01')""");
+      raw.execute("""INSERT INTO debt_allocations(
+        id,payment_id,document_id,branch_id,party_id,party_type,amount_minor,created_at)
+        VALUES('PAYALLOC','PAY','SALE','B','C','customer',100,'2026-01-01')""");
+    }finally{raw.dispose();}
+    final upgraded=DatabaseStore.open(path);
+    try {
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],14);
+      expect(upgraded.first("""SELECT amount_minor FROM debt_credit_allocations
+        WHERE credit_document_id='RET1' AND document_id='SALE'""")?['amount_minor'],100);
+      expect(upgraded.first("""SELECT COUNT(*) AS n FROM debt_credit_allocations
+        WHERE credit_document_id='RET2'""")?['n'],0);
+      final available1=(upgraded.first("""SELECT d.total_minor-
+        COALESCE((SELECT SUM(a.amount_minor) FROM debt_credit_allocations a
+          WHERE a.credit_document_id=d.id),0) AS available
+        FROM documents d WHERE d.id='RET1'""")!['available'] as int);
+      final available2=(upgraded.first("""SELECT d.total_minor-
+        COALESCE((SELECT SUM(a.amount_minor) FROM debt_credit_allocations a
+          WHERE a.credit_document_id=d.id),0) AS available
+        FROM documents d WHERE d.id='RET2'""")!['available'] as int);
+      expect(available1,400);
+      expect(available2,200);
+      expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],100);
+      expect(upgraded.first("SELECT amount_minor FROM debt_allocations WHERE id='PAYALLOC'")?['amount_minor'],100);
+      expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
+    }finally{upgraded.dispose();}
+    final reopened=DatabaseStore.open(path);
+    try {
+      expect(reopened.first("SELECT COUNT(*) AS n FROM debt_credit_allocations")?['n'],1);
+    }finally{reopened.dispose();}
   });
 
   test('newer schema is refused without downgrading data', () {

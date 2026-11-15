@@ -158,7 +158,7 @@ void main() {
     final newInvoice=call('sale',{'branch_id':branch,
       'customer_id':customer['id'],
       'lines':[{'product_id':product['id'],'qty_milli':1000}],
-      'payments':<Map<String,dynamic>>[]});
+      'payments':[{'method':'cash','amount_minor':400}]});
     final creditReturn=call('sale_return',{'branch_id':branch,
       'original_id':newInvoice['id'],'refund_method':'credit',
       'lines':[{'original_line_id':store.first(

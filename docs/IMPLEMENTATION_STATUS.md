@@ -80,3 +80,18 @@ Legacy untargeted receipts are **not** guessed into invoices: new targeted
 payments are conservatively blocked until reconciliation. Multi-document
 allocation, historical repair, refund credits after overpayment, and
 cross-host replication remain open commercial gates.
+
+
+## Continued accounts work: schema v12 multi-invoice allocations
+
+Added additive `debt_allocation_lines` schema, preserving v11 single-invoice
+allocations. One payment now accepts up to 20 distinct invoice allocations
+whose values sum exactly to the posted amount, with branch, party,
+tenant, credit-return, and idempotency enforcement. Flutter debt page
+supports selecting multiple invoices and entering per-invoice amounts.
+New Dart regression suite and independent Python read-only audit detect
+broken sum-to-payment or mismatched party/document links.
+
+Still unresolved: legacy unallocated receipt reconciliation, automatic
+FIFO allocation, post-settlement return overcredits, cloud branch sync,
+and release certification.

@@ -149,6 +149,16 @@ class KasherApi {
       customers:true,branchId:r.url.queryParameters['branch_id'])));
     router.get('/api/v1/suppliers', (Request r)=>_json(engine.listParties(_p(r),
       customers:false,branchId:r.url.queryParameters['branch_id'])));
+    router.get('/api/v1/debts/invoices', (Request r) {
+      final type=r.url.queryParameters['party_type'];
+      final party=r.url.queryParameters['party_id'];
+      if(type!='customer' && type!='supplier') {
+        throw DomainError('party_type must be customer or supplier',400);
+      }
+      if(party==null || party.isEmpty) throw DomainError('party_id required',400);
+      return _json(engine.listDebtInvoices(_p(r),_branch(r),party,
+        customer:type=='customer'));
+    });
     router.get('/api/v1/debts/statement', (Request r) {
       final type=r.url.queryParameters['party_type'];
       final party=r.url.queryParameters['party_id'];

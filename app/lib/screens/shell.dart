@@ -54,7 +54,7 @@ class _ShellScreenState extends State<ShellScreen> {
   bool _visible(int index)=>switch(role) {
     'cashier'=>[1,2,4,6,10,12].contains(index),
     'stock'=>[2,7,10,13,14].contains(index),
-    'purchasing'=>[2,3,5,6,8,10].contains(index),
+    'purchasing'=>[2,3,5,6,8,10,12].contains(index),
     'viewer'=>index==10,
     'manager'=>index!=11,
     _=>true,

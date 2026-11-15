@@ -159,6 +159,8 @@ void main() {
       'original_id':sale['id'],'refund_method':'cash',
       'lines':[{'original_line_id':line['id'],'qty_milli':1000}]});
     final cashReturnId=cashReturn['id'] as String;
+    expect(engine.listDebtInvoices(owner,branch,
+      customer['id'] as String,customer:true)['available_credit_minor'],0);
     final newInvoice=call('sale',{'branch_id':branch,
       'customer_id':customer['id'],
       'lines':[{'product_id':product['id'],'qty_milli':1000}],

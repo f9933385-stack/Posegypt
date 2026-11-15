@@ -52,6 +52,7 @@ void main() {
     final safeBefore=engine.readCashSafe(owner,branch);
     expect(safeBefore['balance_minor'],0);
     expect(safeBefore['id'],safeId);
+    expect(engine.readCashSafe(cashier,branch).containsKey('balance_minor'),false);
     final pending=run(cashier,'cash_safe_drop_request',request(450));
     expect(pending['status'],'pending');
     expect(engine.readCashSafe(owner,branch)['balance_minor'],0);

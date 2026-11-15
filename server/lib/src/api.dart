@@ -201,6 +201,8 @@ class KasherApi {
       _json(engine.saleReceipt(_p(r),id)));
     router.get('/api/v1/dashboard', (Request r)=>_json(engine.dashboard(_p(r),_branch(r))));
     router.get('/api/v1/audit', (Request r)=>_json(engine.audit(_p(r),_branch(r))));
+    router.get('/api/v1/shifts/drawers',(Request r)=>
+      _json(engine.listCashDrawers(_p(r),_branch(r))));
     router.get('/api/v1/shifts', (Request r)=>_json(engine.listShifts(_p(r),_branch(r))));
     router.get('/api/v1/sync/outbox', (Request r)=>_json(engine.outbox(_p(r),_branch(r))));
     final commands={
@@ -220,6 +222,7 @@ class KasherApi {
       'counts':'count_open','counts/lines':'count_line','counts/submit':'count_submit',
       'counts/approve':'count_approve','counts/cancel':'count_cancel',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',
+      'shifts/drawers':'cash_drawer_create',
       'shifts/open':'shift_open','shifts/close':'shift_close',
     };
     commands.forEach((path,command){router.post('/api/v1/$path',(Request r)=>_write(r,command));});

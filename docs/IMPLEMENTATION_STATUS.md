@@ -114,3 +114,27 @@ pending/approved/rejected decisions.
 Separate financial-system sign-off, old bank document review,
 overpaid returns, cloud sync and physical device certification
 remain unresolved commercial gates.
+
+
+## Return credit application and carry-forward: schema v14
+
+Added `debt_credit_allocations` to represent existing credit-refund
+return notes applied to posted invoices. New credit returns are
+automatically applied up to the original invoice's outstanding due;
+excess remains available. Owner/manager can apply that balance to a
+different invoice for the same party/branch. The operation creates
+allocation/audit/outbox records only and never reposts cash or journal
+entries. `GET debts/invoices` exposes available credit notes and
+`POST debts/credits/apply` validates source/target, amount and reason.
+
+The v14 migration backfills old credit returns in chronological order,
+preserving the historical reduction of each original invoice while
+leaving excess available. Dashboard separates positive receivables/
+payables from net customer/supplier credit balances. Domain, API and
+migration tests cover customer/supplier flows, partial original invoice
+settlement, cash-return exclusion, party isolation, idempotency and
+no duplicate journal posting.
+
+Remaining commercial gates still include Egyptian ETA fiscal integration,
+physical cash-register/printer certification, independent cloud sync,
+bank reconciliation and live-store accounting sign-off.

@@ -422,6 +422,100 @@ def audit(db_file: str) -> dict:
                    OR (dst.closed_at IS NOT NULL
                      AND t.reviewed_at>dst.closed_at)))
             """)
+        has_safes = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='cash_safe_drops'
+        """).fetchone() is not None
+        if has_safes:
+            check("cash_safe_registration_scope", """
+              SELECT safe.id,safe.branch_id,safe.created_by
+              FROM cash_safes safe
+              LEFT JOIN branches b ON b.id=safe.branch_id
+              LEFT JOIN users u ON u.id=safe.created_by
+              WHERE b.id IS NULL OR u.id IS NULL
+                 OR u.tenant_id<>b.tenant_id
+                 OR u.role NOT IN ('owner','manager')
+                 OR NOT EXISTS (SELECT 1 FROM cash_drawers d
+                   WHERE d.branch_id=safe.branch_id)
+            """)
+            check("cash_safe_drop_integrity", """
+              SELECT d.id,d.safe_id,d.status,d.amount_minor
+              FROM cash_safe_drops d
+              LEFT JOIN cash_safes safe ON safe.id=d.safe_id
+              LEFT JOIN branches b ON b.id=d.branch_id
+              LEFT JOIN cash_shifts shift ON shift.id=d.source_shift_id
+              LEFT JOIN cash_drawers drawer ON drawer.id=shift.drawer_id
+              LEFT JOIN users maker ON maker.id=d.requested_by
+              LEFT JOIN users reviewer ON reviewer.id=d.reviewed_by
+              WHERE safe.id IS NULL OR b.id IS NULL
+                 OR shift.id IS NULL OR drawer.id IS NULL
+                 OR maker.id IS NULL
+                 OR safe.branch_id<>d.branch_id
+                 OR shift.branch_id<>d.branch_id
+                 OR drawer.branch_id<>d.branch_id
+                 OR shift.user_id<>d.requested_by
+                 OR maker.tenant_id<>b.tenant_id
+                 OR d.amount_minor<=0
+                 OR length(trim(d.reason))<12
+                 OR d.requested_at<shift.opened_at
+                 OR (shift.closed_at IS NOT NULL
+                   AND d.requested_at>shift.closed_at)
+                 OR (d.status='pending' AND (
+                   d.reviewed_by IS NOT NULL OR d.reviewed_at IS NOT NULL
+                   OR d.review_reason IS NOT NULL
+                   OR shift.closed_at IS NOT NULL))
+                 OR (d.status<>'pending' AND (
+                   reviewer.id IS NULL OR reviewer.tenant_id<>b.tenant_id
+                   OR d.reviewed_at IS NULL OR d.review_reason IS NULL
+                   OR length(trim(d.review_reason))<12
+                   OR d.reviewed_at<d.requested_at))
+                 OR (d.status IN ('approved','rejected') AND (
+                   reviewer.role NOT IN ('owner','manager')
+                   OR d.reviewed_by=d.requested_by))
+                 OR (d.status='cancelled' AND
+                   d.reviewed_by<>d.requested_by)
+                 OR (d.status='approved' AND (
+                   d.reviewed_at<shift.opened_at
+                   OR (shift.closed_at IS NOT NULL
+                     AND d.reviewed_at>shift.closed_at)))
+            """)
+            check("cash_safe_negative_shift_expectation", """
+              SELECT s.id,s.branch_id,s.opening_minor,
+                COALESCE((SELECT SUM(l.cash_delta_minor)
+                  FROM cash_shift_journal_links l
+                  WHERE l.shift_id=s.id),0)
+                +COALESCE((SELECT SUM(t.amount_minor)
+                  FROM cash_drawer_transfers t
+                  WHERE t.status='approved'
+                    AND t.destination_shift_id=s.id),0)
+                -COALESCE((SELECT SUM(t.amount_minor)
+                  FROM cash_drawer_transfers t
+                  WHERE t.status='approved'
+                    AND t.source_shift_id=s.id),0)
+                -COALESCE((SELECT SUM(d.amount_minor)
+                  FROM cash_safe_drops d
+                  WHERE d.status='approved'
+                    AND d.source_shift_id=s.id),0)
+                +s.opening_minor AS expected_minor
+              FROM cash_shifts s
+              WHERE s.drawer_id IS NOT NULL AND
+                s.opening_minor+
+                COALESCE((SELECT SUM(l.cash_delta_minor)
+                  FROM cash_shift_journal_links l
+                  WHERE l.shift_id=s.id),0)
+                +COALESCE((SELECT SUM(t.amount_minor)
+                  FROM cash_drawer_transfers t
+                  WHERE t.status='approved'
+                    AND t.destination_shift_id=s.id),0)
+                -COALESCE((SELECT SUM(t.amount_minor)
+                  FROM cash_drawer_transfers t
+                  WHERE t.status='approved'
+                    AND t.source_shift_id=s.id),0)
+                -COALESCE((SELECT SUM(d.amount_minor)
+                  FROM cash_safe_drops d
+                  WHERE d.status='approved'
+                    AND d.source_shift_id=s.id),0)<0
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

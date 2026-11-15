@@ -400,3 +400,24 @@ const schemaV11 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_debt_allocations_party
     ON debt_allocations(branch_id,party_id,party_type)'''
 ];
+
+
+/// V12: one real cash/payment journal entry can be distributed across
+/// several invoices, without rewriting older unique-payment v11 rows.
+const schemaV12 = <String>[
+  '''CREATE TABLE IF NOT EXISTS debt_allocation_lines (
+    id TEXT PRIMARY KEY,
+    payment_id TEXT NOT NULL REFERENCES payments(id),
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    party_id TEXT NOT NULL,
+    party_type TEXT NOT NULL CHECK(party_type IN ('customer','supplier')),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    created_at TEXT NOT NULL,
+    UNIQUE(payment_id,document_id)
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_allocation_lines_document
+    ON debt_allocation_lines(document_id,created_at)''',
+  '''CREATE INDEX IF NOT EXISTS ix_debt_allocation_lines_payment
+    ON debt_allocation_lines(payment_id)'''
+];

@@ -64,6 +64,50 @@ void main() {
     }
   });
 
+  test('v11 invoice payment allocations survive additive v12 migration', () {
+    final raw=sqlite3.open(path);
+    try {
+      raw.execute('PRAGMA foreign_keys=ON');
+      for(final migration in [
+        schemaV1,schemaV2,schemaV3,schemaV4,schemaV5,schemaV6,
+        schemaV7,schemaV8,schemaV9,schemaV10,schemaV11
+      ]) {
+        for(final sql in migration) {raw.execute(sql);}
+      }
+      raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      for(var version=1;version<=11;version++) {
+        raw.execute('INSERT INTO schema_version(version) VALUES(?)',[version]);
+      }
+      raw.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Tenant','now')");
+      raw.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B','T','BR01','Main','now')");
+      raw.execute("INSERT INTO warehouses(id,branch_id,name,is_default) VALUES('W','B','Main',1)");
+      raw.execute("INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at) VALUES('U','T','B','admin','salt','hash','owner','now')");
+      raw.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('S','T','Vendor','now')");
+      raw.execute("""INSERT INTO documents(
+        id,tenant_id,branch_id,warehouse_id,kind,number,party_id,
+        subtotal_minor,discount_minor,tax_minor,total_minor,paid_minor,
+        cost_minor,snapshot_json,created_by,created_at)
+        VALUES('D','T','B','W','purchase','PUR-001','S',
+          500,0,0,500,0,500,'{}','U','now')""");
+      raw.execute("""INSERT INTO payments(
+        id,branch_id,party_id,method,direction,amount_minor,created_at)
+        VALUES('PAY','B','S','cash','out',100,'now')""");
+      raw.execute("""INSERT INTO debt_allocations(
+        id,payment_id,document_id,branch_id,party_id,party_type,
+        amount_minor,created_at)
+        VALUES('ALLOC','PAY','D','B','S','supplier',100,'now')""");
+    } finally {raw.dispose();}
+    final upgraded=DatabaseStore.open(path);
+    try {
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],12);
+      expect(upgraded.first("SELECT amount_minor FROM debt_allocations WHERE id='ALLOC'")?['amount_minor'],100);
+      expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],100);
+      expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_allocation_lines'")?['name'],
+        'debt_allocation_lines');
+      expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
+    } finally {upgraded.dispose();}
+  });
+
   test('newer schema is refused without downgrading data', () {
     final raw=sqlite3.open(path);
     raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');

@@ -138,3 +138,28 @@ no duplicate journal posting.
 Remaining commercial gates still include Egyptian ETA fiscal integration,
 physical cash-register/printer certification, independent cloud sync,
 bank reconciliation and live-store accounting sign-off.
+
+
+## Independent cash drawers: schema v15
+
+Additive `cash_drawers`, nullable `cash_shifts.drawer_id`, and
+`cash_shift_journal_links` provide **opt-in** physical cash separation:
+legacy branches continue using their single shared shift until the
+first drawer is registered, which requires closing the shared shift.
+One open shift per registered drawer and operator; each CASH journal
+posted in independent mode must map to that same authenticated actor's
+open shift or the business transaction rolls back. Debit/credit deltas
+come exclusively from actual balanced `CASH` journal lines.
+Independent shift closing counts only linked journal cash and opening
+float, not other operators or card/bank/wallet payments.
+
+Supervisor closure of another user's shift requires a reason.
+The Flutter shift screen allows managers to register drawers and each
+operator to open/close their own, including cash counts.
+Domain/API/migration tests and read-only Python auditing verify
+scope, actor identities and ledger delta consistency.
+
+This is NOT a complete cash management suite. There is still no
+cash transfer between drawers, safe-drop/bank deposit, float issue
+workflow, second-person count sign-off or certified physical
+cash drawer integration.

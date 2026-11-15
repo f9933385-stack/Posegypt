@@ -227,6 +227,57 @@ def audit(db_file: str) -> dict:
               FROM payments p JOIN debt_allocation_lines a ON a.payment_id=p.id
               GROUP BY p.id HAVING p.amount_minor<>SUM(a.amount_minor)
             """)
+        has_reconciliations = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='debt_reconciliations'
+        """).fetchone() is not None
+        if has_reconciliations:
+            check("debt_reconciliation_review_controls", """
+              SELECT r.id,r.payment_id,r.status
+              FROM debt_reconciliations r
+              LEFT JOIN payments p ON p.id=r.payment_id
+              LEFT JOIN branches b ON b.id=r.branch_id
+              WHERE p.id IS NULL OR b.id IS NULL
+                 OR p.branch_id IS NOT r.branch_id
+                 OR p.party_id IS NOT r.party_id
+                 OR p.document_id IS NOT NULL
+                 OR (r.party_type='customer' AND p.direction<>'in')
+                 OR (r.party_type='supplier' AND p.direction<>'out')
+                 OR (r.status='pending'
+                    AND (r.reviewed_by IS NOT NULL OR r.reviewed_at IS NOT NULL))
+                 OR (r.status<>'pending' AND
+                    (r.reviewed_by IS NULL OR r.reviewed_at IS NULL
+                      OR r.review_reason IS NULL
+                      OR r.requested_by=r.reviewed_by))
+            """)
+            check("approved_debt_reconciliation_matches_allocations", """
+              SELECT r.id,r.payment_id,p.amount_minor
+              FROM debt_reconciliations r
+              JOIN payments p ON p.id=r.payment_id
+              WHERE r.status='approved' AND (
+                (SELECT COUNT(*) FROM debt_reconciliation_lines l
+                 WHERE l.reconciliation_id=r.id)=0
+                OR (SELECT COALESCE(SUM(amount_minor),0)
+                  FROM debt_reconciliation_lines l
+                  WHERE l.reconciliation_id=r.id)<>p.amount_minor
+                OR EXISTS(
+                  SELECT 1 FROM debt_reconciliation_lines l
+                  LEFT JOIN debt_allocation_lines a
+                    ON a.payment_id=r.payment_id
+                   AND a.document_id=l.document_id
+                  WHERE l.reconciliation_id=r.id
+                    AND (a.id IS NULL OR a.amount_minor<>l.amount_minor
+                      OR a.party_id IS NOT r.party_id
+                      OR a.branch_id IS NOT r.branch_id
+                      OR a.party_type IS NOT r.party_type))
+                OR (SELECT COUNT(*) FROM debt_allocation_lines a
+                  WHERE a.payment_id=r.payment_id)<>
+                    (SELECT COUNT(*) FROM debt_reconciliation_lines l
+                      WHERE l.reconciliation_id=r.id)
+                OR EXISTS(SELECT 1 FROM debt_allocations old
+                  WHERE old.payment_id=r.payment_id)
+              )
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

@@ -540,3 +540,37 @@ const schemaV16 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_cash_drawer_transfers_destination
     ON cash_drawer_transfers(destination_shift_id,status)'''
 ];
+
+
+/// V17: branch-local physical cash safe, separate from bank deposits.
+/// Accepted drops only reassign existing physical cash between a drawer and
+/// the branch safe; they never create a second CASH general-ledger movement.
+const schemaV17 = <String>[
+  '''CREATE TABLE IF NOT EXISTS cash_safes (
+    id TEXT PRIMARY KEY,
+    branch_id TEXT NOT NULL UNIQUE REFERENCES branches(id),
+    name TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL
+  )''',
+  '''CREATE TABLE IF NOT EXISTS cash_safe_drops (
+    id TEXT PRIMARY KEY,
+    safe_id TEXT NOT NULL REFERENCES cash_safes(id),
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    source_shift_id TEXT NOT NULL REFERENCES cash_shifts(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','cancelled')),
+    requested_by TEXT NOT NULL REFERENCES users(id),
+    reviewed_by TEXT REFERENCES users(id),
+    requested_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    review_reason TEXT
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_safe_drops_branch
+    ON cash_safe_drops(branch_id,requested_at,id)''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_safe_drops_shift
+    ON cash_safe_drops(source_shift_id,status)''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_safe_drops_safe
+    ON cash_safe_drops(safe_id,status)'''
+];

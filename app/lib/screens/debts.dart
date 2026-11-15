@@ -120,6 +120,100 @@ class _DebtsState extends State<DebtsPage> {
       for(final controller in controllers){controller.dispose();}
     }
   }
+  Future<void> _applyCredit(List<Map<String,dynamic>> credits,
+      List<Map<String,dynamic>> invoices) async {
+    if(partyId==null || credits.isEmpty || invoices.isEmpty || saving)return;
+    final amountInput=TextEditingController();
+    final reasonInput=TextEditingController();
+    String? creditId=credits.first['id'].toString();
+    String? targetId=invoices.first['id'].toString();
+    String? validationError;
+    try {
+      final request=await showDialog<Map<String,dynamic>>(
+        context:context,builder:(ctx)=>StatefulBuilder(
+          builder:(ctx,update)=>AlertDialog(
+            title:const Text('استخدام رصيد مرتجع'),
+            content:SizedBox(width:560,child:Column(
+              mainAxisSize:MainAxisSize.min,children:[
+                const Text('اختر إشعار المرتجع والفاتورة المستحقة. '
+                  'هذا توزيع رصيد موجود بالفعل ولا ينشئ حركة نقدية جديدة.'),
+                const SizedBox(height:12),
+                DropdownButtonFormField<String>(
+                  value:creditId,isExpanded:true,
+                  decoration:const InputDecoration(labelText:'إشعار الرصيد'),
+                  items:[for(final credit in credits)
+                    DropdownMenuItem<String>(value:credit['id'].toString(),
+                      child:Text('${credit['number']} — متاح '
+                        '${money(asInt(credit['available_minor']))}'))],
+                  onChanged:(value)=>update(()=>creditId=value)),
+                const SizedBox(height:10),
+                DropdownButtonFormField<String>(
+                  value:targetId,isExpanded:true,
+                  decoration:const InputDecoration(labelText:'الفاتورة المستحقة'),
+                  items:[for(final invoice in invoices)
+                    DropdownMenuItem<String>(value:invoice['id'].toString(),
+                      child:Text('${invoice['number']} — متبقي '
+                        '${money(asInt(invoice['remaining_minor']))}',
+                        overflow:TextOverflow.ellipsis))],
+                  onChanged:(value)=>update(()=>targetId=value)),
+                const SizedBox(height:10),
+                TextField(controller:amountInput,
+                  keyboardType:const TextInputType.numberWithOptions(decimal:true),
+                  decoration:const InputDecoration(
+                    labelText:'المبلغ بالجنيه',border:OutlineInputBorder())),
+                const SizedBox(height:10),
+                TextField(controller:reasonInput,maxLines:2,
+                  decoration:const InputDecoration(
+                    labelText:'سبب استخدام الرصيد (12 حرفًا على الأقل)',
+                    border:OutlineInputBorder())),
+                if(validationError!=null) ...[
+                  const SizedBox(height:8),
+                  Text(validationError!,style:TextStyle(
+                    color:Theme.of(ctx).colorScheme.error)),
+                ],
+              ])),
+            actions:[
+              TextButton(onPressed:()=>Navigator.pop(ctx),
+                child:const Text('إلغاء')),
+              FilledButton(onPressed:(){
+                try {
+                  final credit=credits.firstWhere((x)=>x['id'].toString()==creditId);
+                  final invoice=invoices.firstWhere((x)=>x['id'].toString()==targetId);
+                  final value=parseMoney(amountInput.text);
+                  if(value<=0 || value>asInt(credit['available_minor']) ||
+                      value>asInt(invoice['remaining_minor'])) {
+                    throw const FormatException('المبلغ يتجاوز الرصيد المتاح أو مستحق الفاتورة');
+                  }
+                  if(reasonInput.text.trim().length<12) {
+                    throw const FormatException('اكتب سببًا واضحًا لاستخدام الرصيد');
+                  }
+                  Navigator.pop(ctx,{
+                    'branch_id':widget.branchId,
+                    'party_type':customer?'customer':'supplier',
+                    'party_id':partyId,'credit_document_id':creditId,
+                    'invoice_id':targetId,'amount_minor':value,
+                    'reason':reasonInput.text.trim()});
+                }catch(e){update(()=>validationError=e.toString());}
+              },child:const Text('تطبيق الرصيد')),
+            ],
+          )),
+      if(request==null || !mounted)return;
+      setState(()=>saving=true);
+      try {
+        await widget.api.post('debts/credits/apply',request);
+        if(mounted) {
+          alert(context,'تم تطبيق الرصيد على الفاتورة بدون حركة نقدية جديدة');
+          _loadInvoices();
+        }
+      }catch(e) {
+        if(mounted)alert(context,'تعذر تطبيق الرصيد: $e',error:true);
+      }finally{if(mounted)setState(()=>saving=false);}
+    }finally{
+      amountInput.dispose();
+      reasonInput.dispose();
+    }
+  }
+
   Future<void> _reconcileLegacy() async {
     if(partyId==null)return;
     await showDialog<void>(context:context,builder:(_)=>
@@ -185,7 +279,23 @@ class _DebtsState extends State<DebtsPage> {
             final legacy=asInt(data['unallocated_settlements_minor']);
             final invoices=(data['invoices'] as List<dynamic>)
               .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+            final credits=(data['credit_notes'] as List<dynamic>? ?? const [])
+              .map((x)=>Map<String,dynamic>.from(x as Map)).toList();
+            final availableCredit=asInt(data['available_credit_minor']);
             return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+              if(availableCredit>0) ...[
+                Text('يوجد رصيد مرتجع غير مستخدم بقيمة ${money(availableCredit)}',
+                  style:TextStyle(color:Theme.of(context).colorScheme.primary,
+                    fontWeight:FontWeight.w600)),
+                if((widget.role=='owner' || widget.role=='manager') &&
+                    invoices.isNotEmpty && credits.isNotEmpty) ...[
+                  const SizedBox(height:8),
+                  OutlinedButton.icon(
+                    onPressed:saving?null:()=>_applyCredit(credits,invoices),
+                    icon:const Icon(Icons.account_balance_wallet_outlined),
+                    label:const Text('استخدام الرصيد على فاتورة مستحقة')),
+                ],
+              ],
               if(legacy>0) ...[
                 Text('يوجد تحصيل/سداد قديم بقيمة ${money(legacy)} بدون توزيع على الفواتير؛ '
                   'يلزم مطابقته أولًا قبل ربط دفعات جديدة بفواتير محددة.',

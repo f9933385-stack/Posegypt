@@ -248,6 +248,57 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         con.close()
         self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
 
+    def test_branch_safe_drop_review_and_scope_are_audited(self):
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO users(id,tenant_id,branch_id,username,password_salt,
+            password_hash,role,created_at)
+          VALUES('CASHIER','T','B','safe-cashier','s','h','cashier','2026-01-01')
+        """)
+        con.execute("""
+          INSERT INTO cash_drawers(id,branch_id,name,created_by,created_at)
+          VALUES('SAFE-DRAWER','B','Customer register','U','2026-01-01')
+        """)
+        con.execute("""
+          INSERT INTO cash_shifts(id,branch_id,user_id,drawer_id,
+            opening_minor,opened_at)
+          VALUES('SAFE-SHIFT','B','CASHIER','SAFE-DRAWER',
+            1200,'2026-01-02')
+        """)
+        con.execute("""
+          INSERT INTO cash_safes(id,branch_id,name,created_by,created_at)
+          VALUES('VAULT','B','Main vault','U','2026-01-01')
+        """)
+        con.execute("""
+          INSERT INTO cash_safe_drops(id,safe_id,branch_id,source_shift_id,
+            amount_minor,reason,status,requested_by,reviewed_by,
+            requested_at,reviewed_at,review_reason)
+          VALUES('DROP','VAULT','B','SAFE-SHIFT',300,
+            'original signed cash handover',
+            'approved','CASHIER','U','2026-01-03','2026-01-03',
+            'independent counting by manager')
+        """)
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE cash_safe_drops SET reviewed_by='CASHIER' WHERE id='DROP'")
+        con.commit()
+        con.close()
+        self.assertIn('cash_safe_drop_integrity',audit(str(self.db))['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE cash_safe_drops SET reviewed_by='U',amount_minor=1300 WHERE id='DROP'")
+        con.commit()
+        con.close()
+        self.assertIn('cash_safe_negative_shift_expectation',
+                      audit(str(self.db))['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("""UPDATE cash_safe_drops SET amount_minor=300,
+          branch_id='WRONG' WHERE id='DROP'""")
+        con.commit()
+        con.close()
+        self.assertIn('cash_safe_drop_integrity',audit(str(self.db))['errors'])
+
     def test_drawer_transfer_requires_independent_recipient_review(self):
         con=sqlite3.connect(self.db)
         con.execute("""

@@ -248,6 +248,51 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         con.close()
         self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
 
+    def test_return_credit_application_scope_and_totals_are_audited(self):
+        con=sqlite3.connect(self.db)
+        con.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('CRED_SUP','T','Supplier','now')")
+        con.execute("""
+          INSERT INTO documents(id,tenant_id,branch_id,warehouse_id,kind,number,
+            party_id,subtotal_minor,discount_minor,tax_minor,total_minor,
+            paid_minor,cost_minor,snapshot_json,created_by,created_at)
+          VALUES('CRED_ORIG','T','B','W','purchase','CRED-ORIG',
+            'CRED_SUP',100,0,0,100,100,100,'{}','U','now')
+        """)
+        con.execute("""
+          INSERT INTO documents(id,tenant_id,branch_id,warehouse_id,kind,number,
+            party_id,original_id,subtotal_minor,discount_minor,tax_minor,total_minor,
+            paid_minor,cost_minor,snapshot_json,created_by,created_at)
+          VALUES('CRED_RETURN','T','B','W','purchase_return','CRED-RET',
+            'CRED_SUP','CRED_ORIG',50,0,0,50,0,50,
+            '{"refund_method":"credit"}','U','now')
+        """)
+        con.execute("""
+          INSERT INTO documents(id,tenant_id,branch_id,warehouse_id,kind,number,
+            party_id,subtotal_minor,discount_minor,tax_minor,total_minor,
+            paid_minor,cost_minor,snapshot_json,created_by,created_at)
+          VALUES('CRED_TARGET','T','B','W','purchase','CRED-TARGET',
+            'CRED_SUP',100,0,0,100,0,100,'{}','U','now')
+        """)
+        con.execute("""
+          INSERT INTO debt_credit_allocations(id,credit_document_id,document_id,
+            branch_id,party_id,party_type,amount_minor,reason,created_by,created_at)
+          VALUES('CRED_ALLOC','CRED_RETURN','CRED_TARGET','B','CRED_SUP',
+            'supplier',50,'approved supplier credit allocation','U','now')
+        """)
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE debt_credit_allocations SET amount_minor=51 WHERE id='CRED_ALLOC'")
+        con.commit()
+        con.close()
+        self.assertIn('debt_credit_source_overallocated',audit(str(self.db))['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE debt_credit_allocations SET amount_minor=50,party_id='WRONG' WHERE id='CRED_ALLOC'")
+        con.commit()
+        con.close()
+        self.assertIn('debt_credit_allocation_scope',audit(str(self.db))['errors'])
+
     def test_reconciliation_review_and_approved_links_are_audited(self):
         con = sqlite3.connect(self.db)
         con.execute("""

@@ -1,0 +1,194 @@
+name: Validate Kasher POS source
+on:
+  push:
+    branches: [feature/import-kasher-source]
+  workflow_dispatch:
+
+concurrency:
+  group: kasher-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  operations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r tools/requirements-backup.txt
+      - run: python tools/verify_schema.py
+      - run: python -m unittest discover -s tools/tests -v
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+        working-directory: server
+      - run: dart analyze
+        working-directory: server
+      - run: dart test
+        working-directory: server
+
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate native scaffolds
+        working-directory: app
+        run: |
+          flutter create --platforms=android,windows --project-name=kasher_app .
+          # Flutter's generated template test targets MyApp, not KasherApp.
+          rm -f test/widget_test.dart
+      - run: flutter pub get
+        working-directory: app
+      - run: flutter analyze --no-fatal-infos
+        working-directory: app
+      - run: flutter test
+        working-directory: app
+
+  android-build:
+    runs-on: ubuntu-latest
+    needs: [server, flutter]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate Android native scaffold
+        working-directory: app
+        run: flutter create --project-name kasher_app --platforms=android .
+      - name: Harden Android manifest for device secrets
+        run: python3 tools/secure_android_manifest.py app/android/app/src/main/AndroidManifest.xml
+      - name: Cache Gradle dependencies
+        uses: gradle/actions/setup-gradle@v4
+      - name: Build Android development APK (retry transient Maven 429 errors)
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if flutter build apk --debug; then
+              echo "Android build completed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Android build failed after three attempts"
+              exit 1
+            fi
+            delay=$((attempt * 45))
+            echo "::warning::Gradle download/build failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kasher-Android-development
+          path: app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-build:
+    runs-on: windows-latest
+    needs: [server, flutter]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build Windows Flutter UI
+        shell: pwsh
+        working-directory: app
+        run: |
+          flutter create --project-name kasher_app --platforms=windows .
+          flutter pub get
+          flutter build windows --release
+      - uses: dart-lang/setup-dart@v1
+      - name: Build Windows local server
+        shell: pwsh
+        working-directory: server
+        run: |
+          dart pub get
+          dart compile exe bin/kasher_server.dart -o ../app/build/windows/x64/runner/Release/kasher_server.exe
+      - name: Windows compiled service end-to-end smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $serverExe = (Resolve-Path 'app/build/windows/x64/runner/Release/kasher_server.exe').Path
+          $db = Join-Path $env:RUNNER_TEMP 'kasher-smoke.sqlite3'
+          $env:KASHER_ADMIN_PASSWORD = 'CI-only-strong-password-1234'
+          $init = & $serverExe "--db=$db" init
+          if ($LASTEXITCODE -ne 0) { throw "Backend init failed: $init" }
+          $tenantLine = @($init | Where-Object { $_ -like 'tenant_id=*' })[0]
+          if (!$tenantLine) { throw 'Missing tenant_id in initialization' }
+          $tenant = $tenantLine.Split('=',2)[1]
+          Remove-Item Env:\KASHER_ADMIN_PASSWORD
+          $serverProcess = Start-Process -FilePath $serverExe -ArgumentList "--db=`"$db`" serve" -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'server.stdout.log') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'server.stderr.log')
+          try {
+            $ready = $false
+            for ($i=0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 500
+              if ($serverProcess.HasExited) { throw 'Branch server terminated during smoke test' }
+              try {
+                $health = Invoke-RestMethod 'http://127.0.0.1:8787/health' -TimeoutSec 2
+                if ($health.status -eq 'ok') { $ready = $true; break }
+              } catch {}
+            }
+            if (!$ready) { throw 'Health endpoint did not become available' }
+            $authBody = @{ tenant_id=$tenant; username='admin'; password='CI-only-strong-password-1234' } | ConvertTo-Json
+            $session = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8787/api/v1/auth/login' -Body $authBody -ContentType 'application/json'
+            if (!$session.token) { throw 'No session token' }
+            function PostJson($path,$data) {
+              $headers = @{ Authorization = "Bearer $($session.token)"; 'Idempotency-Key' = "ci-test-$(New-Guid)" }
+              return Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8787/api/v1/$path" -Headers $headers -Body ($data | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+            }
+            $product = PostJson 'products' @{ sku='CI-001'; name_ar='اختبار'; sell_price_minor=250 }
+            $supplier = PostJson 'suppliers' @{ name='مورد الاختبار' }
+            $purchase = PostJson 'purchases' @{ branch_id=$session.branch_id; supplier_id=$supplier.id; lines=@(@{product_id=$product.id; qty_milli=1000; unit_cost_minor=100}); payments=@() }
+            $sale = PostJson 'sales' @{ branch_id=$session.branch_id; lines=@(@{product_id=$product.id; qty_milli=1000}); payments=@(@{ method='cash'; amount_minor=250 }) }
+            if ($purchase.total_minor -ne 100 -or $sale.total_minor -ne 250 -or $sale.cogs_minor -ne 100) {
+              throw 'Sale, purchase, or WAC result inconsistent'
+            }
+            Write-Host 'PASS: Windows compiled backend, login, purchase, sale and WAC.'
+          } finally {
+            if (!$serverProcess.HasExited) { Stop-Process -Id $serverProcess.Id -Force }
+          }
+      - name: Package Windows development binaries
+        shell: pwsh
+        run: |
+          if (Test-Path 'scripts/start_windows.ps1') {
+            Copy-Item 'scripts/start_windows.ps1' 'app/build/windows/x64/runner/Release/start_windows.ps1'
+          }
+          Compress-Archive -Path app/build/windows/x64/runner/Release/* -DestinationPath Kasher-Windows-development.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kasher-Windows-development
+          path: Kasher-Windows-development.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  preview-live-link:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify demo preview is served as HTML by preview CDN
+        shell: bash
+        run: |
+          url="https://raw.githack.com/f9933385-stack/Posegypt/8a6a727359e67077e6568638424a05ae46930abc/preview/index.html"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 8 --max-time 50 \
+            --dump-header /tmp/preview.headers --output /tmp/preview.html "$url"
+          grep -q 'text/html' /tmp/preview.headers
+          grep -q 'معاينة تفاعلية' /tmp/preview.html
+          grep -q 'لا توجد عمليات مالية أو ضريبية حقيقية' /tmp/preview.html
+          echo "Verified preview: $url"

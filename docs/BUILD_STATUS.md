@@ -1,0 +1,130 @@
+# Kasher development build and release gates
+
+This branch is a **development build**, not certified commercial software.
+GitHub Actions workflow: `.github/workflows/import-kasher-source.yml`.
+
+## What CI verifies
+- Static analysis and unit tests for the Dart/Shelf/SQLite branch server
+- Static analysis (non-fatal deprecation info) and unit tests for Flutter app
+- Python SQLite schema check, audit checker, encrypted backup round-trip and verified retention tests
+- Android **debug** APK build, uploaded as an Actions artifact
+- Windows **release-mode UI binary** and compiled branch-service executable, packaged together as an Actions artifact
+- Compiled Windows branch-service initialization, authenticated API purchase and sale smoke test (see latest workflow run)
+
+## How to download
+Open the newest green GitHub Actions run on the feature branch. In the Artifacts
+section download `Kasher-Windows-development` or `Kasher-Android-development`.
+Artifacts expire under GitHub retention settings (currently 14 days). Windows ZIP
+contains `start_windows.ps1` if the launch script is present in the source commit.
+
+## Critical exclusions before production
+The project is **not** ready for a real supermarket, despite green builds.
+Remaining blockers include branch-to-cloud sync and conflict reconciliation;
+separate-branch transfer dispatch and receipt; managed TLS certificate trust, device attestation, credential rotation and hardware-backed renewal for LAN devices;
+fully reconciled shifts and role overrides; lot-aware preparation/recalls and advanced supplier return/unit pricing rules;
+price/promotional rules; audited signed annual per-device licensing; host-scheduled/offsite
+backup automation and full disaster-recovery drills; tested thermal and label printers and
+electronic scale models; Egyptian tax/e-invoice compliance; signed Android
+release; real Windows installer; accessibility and security review; and the
+complete 34-domain acceptance test suite.
+
+Non-loopback bindings now require configured TLS certificates and keys; plaintext is loopback-only.
+The Windows launcher binds to localhost only. Android testing requires a reachable LAN HTTPS endpoint with an OS-trusted CA and matching DNS SAN.
+
+## New hardening checkpoints
+- Schema v2 migration retains existing v1 records and rejects unknown future versions.
+- POS supports alternate carton/box units with exact line gross, barcode lookup and cumulative return rounding.
+- Encrypted backup rotation runner: `python tools/scheduled_backup.py DATABASE PRIVATE_BACKUP_DIR --keep 14`. It verifies restore before retaining/pruning; **host scheduler, vault and offsite restore drill still required**.
+- Read [`docs/PRODUCTION_READINESS_AR.md`](PRODUCTION_READINESS_AR.md) for Arabic operations and release restrictions.
+
+## Expiry-lot milestone (schema v3)
+- Purchases validate `lot_no` + `expires_on` for tracked products; tracked sale consumes FEFO unexpired lots transactionally.
+- Returns, supplier returns, same-branch warehouse transfers and batch-level stock adjustments preserve lot provenance.
+- A separate batch movement ledger is audited against tracked warehouse stock and includes original document-line references.
+- Expired stock cannot be sold, while returned expired stock stays outside FEFO sale availability.
+- **Not yet complete:** recalls, quarantine workflows, automatic expired-write-off with approvals, lot-aware preparation and fully verified stocktakes; refer to [expiry lot restrictions](EXPIRY_LOTS_AR.md).
+
+### Lot quarantine (schema v4)
+- Authorized warehouse stock staff can block a lot from FEFO sale/transfer, with a required reason and audit event.
+- Only owner/manager can release the lot; physical stock balances remain unchanged.
+- Full recall workflow, disposal certificates, supplier notifications, temperature logs and separate sellable/unsellable warehouses remain unfinished.
+
+
+## Independent warehouse stocktake milestone (schema v5)
+- Draft count from a branch warehouse snapshot (up to 2000 lines), live sales still run.
+- Counted quantity including zero for every line, plus exact positive-cost variance.
+- Independent owner/manager approval; atomic stock adjustment, WAC journal and lot movement.
+- Reject approvals after intervening inventory movement; cancel/restart the count.
+- SQLite migration is forward-only; completed counts retain an auditable record.
+- **Not production certified:** multi-cashier field trial, blind second count,
+  device integration, approvals at configurable variance thresholds and cloud sync.
+
+[دليل الجرد بالعربية](STOCKTAKE_AR.md)
+
+## HTTPS milestone
+- Server refuses all plaintext non-loopback listening and accepts a configured TLS certificate/key pair.
+- Flutter refuses remote HTTP endpoints before sending login credentials or bearer tokens.
+- TLS tests use an ephemeral local test certificate with a real Shelf HTTPS listener when OpenSSL is available.
+- Still missing: per-device pairing, revocation, managed certificate lifecycle and field security validation.
+- [Arabic trusted HTTPS guide](HTTPS_LAN_AR.md).
+
+## Device pairing v6 milestone
+- One-time 10-minute admin-generated pairing codes, hash-only storage, one-time secret claim.
+- Persistent encrypted device credentials via flutter_secure_storage (Windows/Android), server-bound sessions and immediate revocation.
+- LAN mode requires device and employee credentials; loopback retains explicitly local initial enrollment.
+- Hardened Android manifest auto-backup and cleartext settings in CI.
+- Device pairing is NOT a substitute for managed MDM, hardware attestation, mTLS, intrusion monitoring or complete security review. [Arabic enrollment guide](DEVICE_PAIRING_AR.md).
+
+## Carton purchasing
+- Receiving a carton/box by `unit_id` and integer `unit_count` converts to base inventory thousandths with independent carton purchase cost and exact invoice gross.
+- Existing discounts, payment methods, supplier payable, FEFO receipt and partial purchase returns remain on the same SQL transaction and integer-piaster ledger.
+- Flutter purchasing now lets the user switch between base units and configured cartons/boxes, with different quantity/cost labels.
+- **Still requires:** commercial device/batch receipt pilot, supplier order approvals, unit-scale conversion policy and verified refund rules.
+
+## Price promotions milestone (schema v7)
+- Owner/manager can schedule lower fixed prices for base items or cartons independently.
+- Overlap prevention, UTC time validation, role restriction, audit trail, immediate cancellation and server-authoritative POS pricing.
+- Flutter inventory UI can create and stop offers; POS shows active effective price.
+- **Still missing:** coupons, multibuy, per-branch pricing, loyalty, price lock/review before cash tender, business sign-off and end-device tests.
+- [Arabic promotions guide](PROMOTIONS_AR.md).
+
+- Promotion checkout safety: Flutter now sends `expected_total_minor`; the server rejects a changed price with HTTP 409 and rolls back the sale. The cashier must refresh and re-confirm. A dedicated interactive stale-price dialog is still missing.
+
+
+## Two-phase local branch shipping (schema v8)
+- Pending shipments reserve inventory in a separate `IN_TRANSIT` accounting ledger; destination quantities change only on receipt.
+- Owner/manager create and cancel; a **different authorized destination manager/owner** confirms receipt. Idempotent writes prevent duplicate subtraction or reception.
+- Tracked goods preserve FEFO lots and expiry; auditor checks movement and transit-value consistency.
+- **Not cloud sync:** this works on one shared SQLite host only. Separate machines, unreliable WAN, partial receipts, damage claims, signature capture, and network conflict resolution are still missing.
+- [Arabic shipping guide](BRANCH_SHIPMENTS_AR.md).
+
+
+## Verified secondary encrypted backups (operator tooling)
+- Added one-shot encrypted mirroring to a second protected folder/UNC path, authenticated restore and database audit from a **local scratch directory** before finalizing the mirror.
+- Lock prevents concurrent mirror writes, SHA-256 catches transfer corruption, and retention runs only after verified offsite copy. Optional `--offsite-directory` integrates this before local retention in `scheduled_backup.py`.
+- Added regression tests for remote corruption/failure, wrong password, lock ownership, restoration, retention and safe backup failure behavior.
+- **Not done:** provisioned offsite hardware/ACLs, automatic vault-backed scheduling and alerts, actual cross-machine recovery drill, cloud OAuth, ransomware-immutable remote storage. See [Arabic instructions](BACKUP_OFFSITE_AR.md).
+
+
+## Signed annual per-device license milestone (schema v9)
+- Offline vendor-only Python Ed25519 issuer creates a signed identity- and expiry-bound token, but never publishes the signing key; Dart verifies against an operator-provisioned public key list.
+- Authenticated owner/manager activates or renews **the current enrolled device only**; expiry/invalid grants, revoked devices and detected server-clock rollback put normal POST commands into read-only mode while GET remains accessible.
+- Remote LAN mode enforces grants by default, and localhost can enable explicit `--license-enforced`; the developer launcher is not a licensed commercial build.
+- Tests cover Python/Dart signature compatibility, fraudulent claims, one-year duration, expiry and session-bound activation.
+- **Remaining:** commercial billing/payment, provisioning at scale, hardened local deployment, protected license-key storage, signed production installers and live-store acceptance tests. See [license guide](LICENSES_AR.md).
+
+
+## Arabic receipt printing milestone
+- Flutter displays a verified Arabic 80mm sale receipt automatically **after** persisting the sale and offers reprint from reports without duplicate transactions.
+- A new server-owned GET endpoint returns reconciled document lines, exact EGP totals and payment method splits; it never reveals COGS or user secrets.
+- Arabic-shaped Flutter widgets are rasterized into an 80mm PDF, passed to Windows/Android platform print dialog through the supported printing plugin.
+- Regression tests validate HTTP access, tax, cartons, payment reconciliation, corrupt server records and Arabic client rendering.
+- **Not certified hardware or tax:** no ESC/POS byte protocol, cut/cash drawer, selected printer driver verification, fiscal e-receipt issuance, test-store print results or long receipt pagination. See [Arabic printing guide](PRINTING_AR.md).
+
+
+## ESC/POS LAN raster printing (development)
+- Optional native TCP 9100 image printing on operator-specified RFC1918 IPv4 address, for GS v 0 compatible 58 mm (384 dots) or 80 mm (576 dots) printer heads. Arabic is rendered as a monochrome image, split into bounded raster chunks; cutter command is disabled by default.
+- The app locally remembers printer address and width (no access token). User must explicitly initiate each printing attempt; no automatic resend of an ambiguous write.
+- Android generated production manifest explicitly includes INTERNET permission while keeping cleartext HTTP traffic blocked; LAN raw socket is separately IP/port restricted.
+- Tests validate image raster bytes, bit order and width/chunk headers, corrupted input and a local ephemeral TCP dummy printer.
+- **Not field complete:** printer model compatibility/physical printing, modern Epson GS ( L support, USB/Bluetooth, driver and paper status, cutter/drawer warranty, fiscal integration, network VLAN/security assessment. See [Arabic guide](PRINTING_AR.md).

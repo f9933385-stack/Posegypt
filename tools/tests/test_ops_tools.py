@@ -248,6 +248,63 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         con.close()
         self.assertIn('split_allocation_consistency',audit(str(self.db))['errors'])
 
+    def test_drawer_transfer_requires_independent_recipient_review(self):
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          INSERT INTO users(id,tenant_id,branch_id,username,password_salt,
+            password_hash,role,created_at)
+          VALUES('V','T','B','second-cashier','salt','hash','cashier','2026-01-01')
+        """)
+        for drawer,user in [('FIRST','U'),('SECOND','V')]:
+            con.execute("""
+              INSERT INTO cash_drawers(id,branch_id,name,created_by,created_at)
+              VALUES(?,'B',?,?,'2026-01-01')
+            """,(drawer,drawer,user))
+        for shift,user,drawer in [
+            ('S1','U','FIRST'),('S2','V','SECOND')]:
+            con.execute("""
+              INSERT INTO cash_shifts(id,branch_id,user_id,drawer_id,
+                opening_minor,opened_at)
+              VALUES(?,'B',?,?,1000,'2026-01-02')
+            """,(shift,user,drawer))
+        con.execute("""
+          INSERT INTO cash_drawer_transfers(id,branch_id,source_shift_id,
+            destination_shift_id,amount_minor,reason,status,requested_by,
+            reviewed_by,requested_at,reviewed_at,review_reason)
+          VALUES('TRANSFER','B','S1','S2',200,'paper handover verified',
+            'approved','U','V','2026-01-03','2026-01-03',
+            'receiving operator counted cash')
+        """)
+        con.commit()
+        con.close()
+        self.assertEqual(audit(str(self.db))['status'],'pass')
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          UPDATE cash_drawer_transfers SET reviewed_by='U' WHERE id='TRANSFER'
+        """)
+        con.commit()
+        con.close()
+        self.assertIn('cash_drawer_transfer_integrity',
+            audit(str(self.db))['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          UPDATE cash_drawer_transfers SET reviewed_by='V',
+            requested_by='V' WHERE id='TRANSFER'
+        """)
+        con.commit()
+        con.close()
+        self.assertIn('cash_drawer_transfer_integrity',
+            audit(str(self.db))['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("""
+          UPDATE cash_drawer_transfers SET requested_by='U',
+            review_reason='short' WHERE id='TRANSFER'
+        """)
+        con.commit()
+        con.close()
+        self.assertIn('cash_drawer_transfer_integrity',
+            audit(str(self.db))['errors'])
+
     def test_independent_drawer_cash_links_and_operator_scope_are_audited(self):
         con=sqlite3.connect(self.db)
         con.execute("""

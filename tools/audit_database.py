@@ -325,6 +325,55 @@ def audit(db_file: str) -> dict:
                 COALESCE((SELECT SUM(x.amount_minor) FROM debt_credit_allocations x
                   WHERE x.document_id=dst.id),0)>dst.total_minor
             """)
+        has_drawers = con.execute("""
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name='cash_drawers'
+        """).fetchone() is not None
+        if has_drawers:
+            check("cash_drawer_location", """
+              SELECT d.id,d.branch_id FROM cash_drawers d
+              LEFT JOIN branches b ON b.id=d.branch_id
+              LEFT JOIN users u ON u.id=d.created_by
+              WHERE b.id IS NULL OR u.id IS NULL
+                 OR u.tenant_id<>b.tenant_id
+            """)
+            check("cash_shift_drawer_ownership", """
+              SELECT s.id,s.drawer_id,s.user_id FROM cash_shifts s
+              LEFT JOIN cash_drawers d ON d.id=s.drawer_id
+              LEFT JOIN users u ON u.id=s.user_id
+              WHERE s.drawer_id IS NOT NULL AND
+                (d.id IS NULL OR d.branch_id<>s.branch_id OR
+                 u.id IS NULL OR u.tenant_id<>(SELECT tenant_id
+                   FROM branches WHERE id=s.branch_id))
+            """)
+            check("cash_shift_posting_integrity", """
+              SELECT l.journal_entry_id,l.shift_id,l.cash_delta_minor
+              FROM cash_shift_journal_links l
+              LEFT JOIN journal_entries e ON e.id=l.journal_entry_id
+              LEFT JOIN cash_shifts s ON s.id=l.shift_id
+              LEFT JOIN cash_drawers d ON d.id=s.drawer_id
+              WHERE e.id IS NULL OR s.id IS NULL OR d.id IS NULL
+                 OR e.branch_id<>s.branch_id
+                 OR d.branch_id<>s.branch_id
+                 OR e.created_by<>s.user_id
+                 OR e.created_at<s.opened_at
+                 OR (s.closed_at IS NOT NULL AND e.created_at>s.closed_at)
+                 OR COALESCE((SELECT SUM(j.debit_minor-j.credit_minor)
+                   FROM journal_lines j
+                   WHERE j.entry_id=e.id AND j.account='CASH'),0)
+                   <>l.cash_delta_minor
+            """)
+            check("cash_shift_unattributed_cash", """
+              SELECT e.id,e.branch_id,e.created_by,e.created_at
+              FROM journal_entries e
+              WHERE EXISTS(SELECT 1 FROM cash_drawers d
+                WHERE d.branch_id=e.branch_id AND d.created_at<=e.created_at)
+                AND EXISTS(SELECT 1 FROM journal_lines j
+                  WHERE j.entry_id=e.id AND j.account='CASH'
+                    AND (j.debit_minor<>0 OR j.credit_minor<>0))
+                AND NOT EXISTS(SELECT 1 FROM cash_shift_journal_links l
+                  WHERE l.journal_entry_id=e.id)
+            """)
         check("invalid_paid_amount", """
           SELECT id, total_minor,paid_minor FROM documents
           WHERE paid_minor<0 OR paid_minor>total_minor

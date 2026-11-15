@@ -184,6 +184,35 @@ class AuditWithRealSchemaTest(unittest.TestCase):
         self.assertIn('branch_shipment_movement',result['errors'])
         self.assertIn('branch_shipment_transit_value',result['errors'])
 
+    def test_invoice_allocation_must_match_its_payment_and_invoice(self):
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('S','T','Supplier','now')")
+        con.execute("""
+          INSERT INTO documents(id,tenant_id,branch_id,warehouse_id,kind,number,
+            party_id,subtotal_minor,discount_minor,tax_minor,total_minor,
+            paid_minor,cost_minor,snapshot_json,created_by,created_at)
+          VALUES('D','T','B','W','purchase','P-01','S',100,0,0,100,0,100,'{}','U','now')
+        """)
+        con.execute("""
+          INSERT INTO payments(id,branch_id,party_id,method,direction,amount_minor,created_at)
+          VALUES('PAY','B','S','cash','out',100,'now')
+        """)
+        con.execute("""
+          INSERT INTO debt_allocations(id,payment_id,document_id,branch_id,
+            party_id,party_type,amount_minor,created_at)
+          VALUES('ALLOC','PAY','D','B','S','supplier',90,'now')
+        """)
+        con.commit()
+        con.close()
+        result=audit(str(self.db))
+        self.assertIn('invoice_allocation_consistency', result['errors'])
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE debt_allocations SET amount_minor=100 WHERE id='ALLOC'")
+        con.commit()
+        con.close()
+        result=audit(str(self.db))
+        self.assertNotIn('invoice_allocation_consistency',result['errors'])
+
     def test_unbalanced_entry_is_detected(self):
         con=sqlite3.connect(self.db)
         con.execute("UPDATE journal_lines SET credit_minor=90 WHERE id='L2'")

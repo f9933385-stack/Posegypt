@@ -481,3 +481,34 @@ const schemaV14 = <String>[
   '''CREATE INDEX IF NOT EXISTS ix_debt_credit_allocations_party
     ON debt_credit_allocations(branch_id,party_id,party_type,created_at)'''
 ];
+
+
+/// V15: opt-in, independently attributable cash drawers. Legacy branches
+/// remain in shared one-shift mode until the first drawer is registered.
+/// An immutable journal-to-shift link records each CASH ledger movement.
+const schemaV15 = <String>[
+  '''CREATE TABLE IF NOT EXISTS cash_drawers (
+    id TEXT PRIMARY KEY,
+    branch_id TEXT NOT NULL REFERENCES branches(id),
+    name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(branch_id,name)
+  )''',
+  '''ALTER TABLE cash_shifts ADD COLUMN drawer_id TEXT REFERENCES cash_drawers(id)''',
+  '''CREATE UNIQUE INDEX IF NOT EXISTS ux_open_cash_shift_drawer
+    ON cash_shifts(drawer_id)
+    WHERE drawer_id IS NOT NULL AND closed_at IS NULL''',
+  '''CREATE UNIQUE INDEX IF NOT EXISTS ux_open_cash_shift_actor
+    ON cash_shifts(branch_id,user_id)
+    WHERE drawer_id IS NOT NULL AND closed_at IS NULL''',
+  '''CREATE TABLE IF NOT EXISTS cash_shift_journal_links (
+    journal_entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id),
+    shift_id TEXT NOT NULL REFERENCES cash_shifts(id),
+    cash_delta_minor INTEGER NOT NULL CHECK(cash_delta_minor<>0),
+    created_at TEXT NOT NULL
+  )''',
+  '''CREATE INDEX IF NOT EXISTS ix_cash_shift_journal_links_shift
+    ON cash_shift_journal_links(shift_id,created_at)'''
+];

@@ -766,6 +766,74 @@ class PosEngine {
       FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id
       WHERE l.account=? AND e.branch_id=?''',[account,branch])!['balance'] as int);
 
+
+  /// Older receipts without a target document cannot be reliably attached to
+  /// invoices retroactively. Refuse *new targeted* allocations until those
+  /// payments have been reconciled, while retaining the legacy flow intact.
+  int _unallocatedSettlements(String branch,String party,{required bool customer}) =>
+    (store.first('''SELECT COALESCE(SUM(p.amount_minor),0) AS total
+      FROM payments p WHERE p.branch_id=? AND p.party_id=?
+        AND p.document_id IS NULL AND p.direction=?
+        AND NOT EXISTS (SELECT 1 FROM debt_allocations a WHERE a.payment_id=p.id)''',
+      [branch,party,customer?'in':'out'])!['total'] as int);
+
+  Map<String,Object?> _invoiceRemaining(Principal p,String branch,
+      String party,String invoiceId,{required bool customer}) {
+    final kind=customer?'sale':'purchase';
+    final invoice=store.first('''SELECT id,number,kind,total_minor,paid_minor,
+      created_at FROM documents
+      WHERE id=? AND tenant_id=? AND branch_id=? AND party_id=?
+        AND kind=? AND state='posted' ''',
+      [invoiceId,p.tenantId,branch,party,kind]);
+    if(invoice==null) throw DomainError('Invoice not found for this party and branch',404);
+    final linked=store.first('''SELECT COALESCE(SUM(amount_minor),0) AS total
+      FROM debt_allocations WHERE document_id=?''',[invoiceId])!['total'] as int;
+    final returns=store.rows('''SELECT total_minor,snapshot_json FROM documents
+      WHERE tenant_id=? AND branch_id=? AND party_id=? AND original_id=?
+        AND kind=? AND state='posted' ''',
+      [p.tenantId,branch,party,invoiceId,
+        customer?'sale_return':'purchase_return']);
+    var credited=0;
+    for(final row in returns) {
+      final snapshot=jsonDecode(row['snapshot_json'] as String);
+      if(snapshot is! Map) throw DomainError('Return snapshot is invalid',409);
+      if(snapshot['refund_method']=='credit') credited+=row['total_minor'] as int;
+    }
+    final due=(invoice['total_minor'] as int)-
+      (invoice['paid_minor'] as int)-credited-linked;
+    return {...invoice,'return_credit_minor':credited,
+      'allocated_minor':linked,'remaining_minor':due>0?due:0,
+      'excess_credit_minor':due<0?-due:0};
+  }
+
+  Map<String,Object?> listDebtInvoices(Principal p,String branchId,
+      String partyId,{required bool customer}) {
+    _allow(p,customer?['owner','manager','cashier']:
+      ['owner','manager','purchasing']);
+    final branch=_branch(p,branchId);
+    final party=nonEmpty(partyId,'party_id');
+    _party(customer?'customers':'suppliers',p,party);
+    final unallocated=_unallocatedSettlements(branch,party,customer:customer);
+    final documents=store.rows('''SELECT id FROM documents
+      WHERE tenant_id=? AND branch_id=? AND party_id=?
+        AND kind=? AND state='posted'
+      ORDER BY created_at DESC,id DESC LIMIT 501''',
+      [p.tenantId,branch,party,customer?'sale':'purchase']);
+    final items=<Map<String,Object?>>[];
+    for(final row in documents.take(500)) {
+      final invoice=_invoiceRemaining(p,branch,party,row['id'] as String,
+        customer:customer);
+      if((invoice['remaining_minor'] as int)>0) items.add(invoice);
+    }
+    return {'branch_id':branch,'party_id':party,
+      'party_type':customer?'customer':'supplier',
+      'balance_minor':_branchAccountBalance(
+        '${customer?'AR':'AP'}:$party',branch)*(customer?1:-1),
+      'unallocated_settlements_minor':unallocated,
+      'allocation_available':unallocated==0,
+      'has_more':documents.length>500,'invoices':items};
+  }
+
   Map<String,Object?> _settle(Principal p,Map<String,dynamic> input,{required bool customer}) {
     _allow(p,customer?['owner','manager','cashier']:['owner','manager','purchasing']);
     final branch=_branch(p,input['branch_id']);
@@ -776,15 +844,38 @@ class PosEngine {
     final account='${customer?'AR':'AP'}:$party';
     final outstanding=_branchAccountBalance(account,branch) * (customer?1:-1);
     if(amount>outstanding) throw DomainError('Amount exceeds outstanding debt',409);
+    final targetId=input['invoice_id'];
+    Map<String,Object?>? invoice;
+    if(targetId!=null) {
+      final documentId=nonEmpty(targetId,'invoice_id');
+      if(_unallocatedSettlements(branch,party,customer:customer)>0) {
+        throw DomainError('Legacy unallocated payments require reconciliation before targeting an invoice',409);
+      }
+      invoice=_invoiceRemaining(p,branch,party,documentId,customer:customer);
+      if(amount>(invoice['remaining_minor'] as int)) {
+        throw DomainError('Amount exceeds this invoice remaining balance',409);
+      }
+    }
     final id=_id(),direction=customer?'in':'out';
     store.exec('''INSERT INTO payments(id,branch_id,party_id,method,direction,amount_minor,reference,created_at)
       VALUES(?,?,?,?,?,?,?,?)''',[id,branch,party,method,direction,amount,input['reference'],_now()]);
+    if(invoice!=null) {
+      store.exec('''INSERT INTO debt_allocations(
+        id,payment_id,document_id,branch_id,party_id,party_type,amount_minor,created_at)
+        VALUES(?,?,?,?,?,?,?,?)''',[_id(),id,invoice['id'],branch,party,
+          customer?'customer':'supplier',amount,_now()]);
+    }
     _post(p,branch,direction,id,customer
       ? [LedgerLine(payAcc,debit:amount),LedgerLine(account,credit:amount)]
       : [LedgerLine(account,debit:amount),LedgerLine(payAcc,credit:amount)]);
-    _audit(p,'debt.$direction',id,{'party_id':party,'amount_minor':amount},branch);
-    _outbox(branch,'payment',{'id':id,'party_id':party,'direction':direction});
-    return {'id':id,'remaining_minor':outstanding-amount};
+    _audit(p,'debt.$direction',id,{'party_id':party,'amount_minor':amount,
+      if(invoice!=null) 'invoice_id':invoice['id']},branch);
+    _outbox(branch,'payment',{'id':id,'party_id':party,'direction':direction,
+      if(invoice!=null) 'invoice_id':invoice['id']});
+    return {'id':id,'remaining_minor':outstanding-amount,
+      if(invoice!=null) 'invoice_id':invoice['id'],
+      if(invoice!=null) 'invoice_remaining_minor':
+        (invoice['remaining_minor'] as int)-amount};
   }
 
   Map<String,Object?> _expense(Principal p,Map<String,dynamic> input) {

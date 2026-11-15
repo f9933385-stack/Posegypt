@@ -216,6 +216,7 @@ class KasherApi {
       'debts/reconciliations':'debt_reconciliation_request',
       'debts/reconciliations/approve':'debt_reconciliation_approve',
       'debts/reconciliations/reject':'debt_reconciliation_reject',
+      'debts/credits/apply':'debt_credit_apply',
       'counts':'count_open','counts/lines':'count_line','counts/submit':'count_submit',
       'counts/approve':'count_approve','counts/cancel':'count_cancel',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',

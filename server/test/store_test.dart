@@ -110,6 +110,67 @@ void main() {
     } finally {upgraded.dispose();}
   });
 
+  test('v12 distributed payments survive v13 migration with original journal', () {
+    final raw=sqlite3.open(path);
+    try {
+      raw.execute('PRAGMA foreign_keys=ON');
+      for(final migration in [
+        schemaV1,schemaV2,schemaV3,schemaV4,schemaV5,schemaV6,
+        schemaV7,schemaV8,schemaV9,schemaV10,schemaV11,schemaV12
+      ]) {
+        for(final statement in migration) {raw.execute(statement);}
+      }
+      raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');
+      for(var version=1;version<=12;version++) {
+        raw.execute('INSERT INTO schema_version(version) VALUES(?)',[version]);
+      }
+      raw.execute("INSERT INTO tenants(id,name,created_at) VALUES('T','Tenant','now')");
+      raw.execute("INSERT INTO branches(id,tenant_id,code,name,created_at) VALUES('B','T','BR01','Branch','now')");
+      raw.execute("INSERT INTO warehouses(id,branch_id,name,is_default) VALUES('W','B','Main',1)");
+      raw.execute("INSERT INTO users(id,tenant_id,branch_id,username,password_salt,password_hash,role,created_at) VALUES('U','T','B','admin','salt','hash','owner','now')");
+      raw.execute("INSERT INTO suppliers(id,tenant_id,name,created_at) VALUES('S','T','Vendor','now')");
+      for(final doc in ['D1','D2']) {
+        raw.execute("""INSERT INTO documents(
+          id,tenant_id,branch_id,warehouse_id,kind,number,party_id,
+          subtotal_minor,discount_minor,tax_minor,total_minor,paid_minor,
+          cost_minor,snapshot_json,created_by,created_at)
+          VALUES(?,'T','B','W','purchase',?,'S',500,0,0,500,0,500,'{}','U','now')""",
+          [doc,doc]);
+      }
+      raw.execute("""INSERT INTO payments(
+        id,branch_id,party_id,method,direction,amount_minor,created_at)
+        VALUES('PAY','B','S','cash','out',300,'now')""");
+      for(final item in [
+        ['LINE1','D1',100],['LINE2','D2',200]
+      ]) {
+        raw.execute("""INSERT INTO debt_allocation_lines(
+          id,payment_id,document_id,branch_id,party_id,party_type,
+          amount_minor,created_at)
+          VALUES(?,'PAY',?,'B','S','supplier',?,'now')""",item);
+      }
+      raw.execute("""INSERT INTO journal_entries(
+        id,branch_id,reference_type,reference_id,created_by,created_at)
+        VALUES('J','B','out','PAY','U','now')""");
+      raw.execute("""INSERT INTO journal_lines(
+        id,entry_id,account,debit_minor,credit_minor)
+        VALUES('L1','J','AP:S',300,0)""");
+      raw.execute("""INSERT INTO journal_lines(
+        id,entry_id,account,debit_minor,credit_minor)
+        VALUES('L2','J','CASH',0,300)""");
+    }finally{raw.dispose();}
+    final upgraded=DatabaseStore.open(path);
+    try {
+      expect(upgraded.first('SELECT MAX(version) AS v FROM schema_version')?['v'],13);
+      expect(upgraded.first("SELECT amount_minor FROM payments WHERE id='PAY'")?['amount_minor'],300);
+      expect(upgraded.first("SELECT COUNT(*) AS n FROM debt_allocation_lines WHERE payment_id='PAY'")?['n'],2);
+      expect(upgraded.first("SELECT SUM(amount_minor) AS total FROM debt_allocation_lines WHERE payment_id='PAY'")?['total'],300);
+      expect(upgraded.first("SELECT SUM(debit_minor-credit_minor) AS balance FROM journal_lines WHERE entry_id='J'")?['balance'],0);
+      expect(upgraded.first("SELECT name FROM sqlite_master WHERE name='debt_reconciliations'")?['name'],
+        'debt_reconciliations');
+      expect(upgraded.rows('PRAGMA foreign_key_check'),isEmpty);
+    }finally{upgraded.dispose();}
+  });
+
   test('newer schema is refused without downgrading data', () {
     final raw=sqlite3.open(path);
     raw.execute('CREATE TABLE schema_version(version INTEGER PRIMARY KEY)');

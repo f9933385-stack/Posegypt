@@ -203,6 +203,8 @@ class KasherApi {
     router.get('/api/v1/audit', (Request r)=>_json(engine.audit(_p(r),_branch(r))));
     router.get('/api/v1/shifts/drawers',(Request r)=>
       _json(engine.listCashDrawers(_p(r),_branch(r))));
+    router.get('/api/v1/shifts/transfers',(Request r)=>
+      _json(engine.listCashTransfers(_p(r),_branch(r))));
     router.get('/api/v1/shifts', (Request r)=>_json(engine.listShifts(_p(r),_branch(r))));
     router.get('/api/v1/sync/outbox', (Request r)=>_json(engine.outbox(_p(r),_branch(r))));
     final commands={
@@ -223,6 +225,10 @@ class KasherApi {
       'counts/approve':'count_approve','counts/cancel':'count_cancel',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',
       'shifts/drawers':'cash_drawer_create',
+      'shifts/transfers':'cash_transfer_request',
+      'shifts/transfers/approve':'cash_transfer_approve',
+      'shifts/transfers/reject':'cash_transfer_reject',
+      'shifts/transfers/cancel':'cash_transfer_cancel',
       'shifts/open':'shift_open','shifts/close':'shift_close',
     };
     commands.forEach((path,command){router.post('/api/v1/$path',(Request r)=>_write(r,command));});

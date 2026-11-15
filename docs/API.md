@@ -186,3 +186,32 @@ For a single-PC deployment, start with `--license-enforced` and an administrator
 ## Read-only verified printed sale receipt
 
 `GET /api/v1/receipts/<id>` returns ONLY a posted `sale` (not purchases or unposted documents), scoped to the authenticated tenant and branch. The server reconciles **persisted** line gross, discount and VAT amounts against posted totals, and persisted payment method amounts against `paid_minor`, before returning a sanitized receipt object (no COGS, purchase cost, hidden password, customer PII, or payment reference). The response carries `store_name`, `branch_name`, `cashier_name`, number, UTC timestamp, items with base/alternate-unit quantity, tax, `total_minor`, `paid_minor`, `due_minor`, `payments` and a clear **non-fiscal** disclaimer. Any inconsistent stored accounting data fails closed with 409. This is a GET-only read: reprints never post another sale or inventory movement. [Arabic printing guide](PRINTING_AR.md).
+
+
+## Branch-isolated debt settlements and read-only account statements
+
+The optional `branch_id` query parameter on `GET /api/v1/customers` and
+`GET /api/v1/suppliers` restricts returned `balance_minor` to the requested,
+authorized branch. For backward compatibility, omitting the parameter retains
+the previously exposed tenant-wide balance for owners and managers.
+Cashiers see customer debt balances only for their branch; purchasing staff
+see supplier debt balances only for their branch.
+
+`GET /api/v1/debts/statement?branch_id=<branch>&party_type=customer&party_id=<id>`
+(or `party_type=supplier`) returns the party name, current branch balance,
+`opening_minor`, and up to 200 latest journal entries (newest first), each
+with `debit_minor`, `credit_minor`, `change_minor`, and
+`balance_after_minor`. Positive change increases the party's debt;
+negative change reduces it. Earlier movements are included in opening.
+Cashiers can view customer statements for their own branch only; purchasing
+staff can view supplier statements for their own branch only. Managers/owners
+have role-appropriate authorized-branch access. The statement is derived
+from immutable journal lines, not from invoice paid labels.
+
+**Critical safety fix:** `POST /api/v1/customers/receipts` and
+`POST /api/v1/suppliers/payments` now verify debt **in the selected
+authorized branch**, not against the aggregate tenant balance. This prevents
+cash applied against an unrelated branch's debt. Customer **credit-limit**
+checking remains intentionally tenant-wide until the per-branch credit
+policy is approved. Cross-branch reallocations, per-invoice allocation, and
+multi-host replication are **not implemented**. No balances are silently moved.

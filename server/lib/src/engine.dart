@@ -1837,7 +1837,7 @@ class PosEngine {
   }
 
   List<Map<String,Object?>> listCashDrawers(Principal p,String branchId) {
-    _allow(p,['owner','manager','cashier']);
+    _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,branchId);
     return store.rows('''SELECT d.id,d.branch_id,d.name,d.active,
       (SELECT s.id FROM cash_shifts s WHERE s.drawer_id=d.id
@@ -1846,7 +1846,7 @@ class PosEngine {
   }
 
   Map<String,Object?> _shiftOpen(Principal p,Map<String,dynamic> input) {
-    _allow(p,['owner','manager','cashier']);
+    _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,input['branch_id']);
     final multi=store.first('SELECT id FROM cash_drawers WHERE branch_id=? LIMIT 1',
       [branch])!=null;
@@ -1902,13 +1902,13 @@ class PosEngine {
   }
 
   Map<String,Object?> _shiftClose(Principal p,Map<String,dynamic> input) {
-    _allow(p,['owner','manager','cashier']);
+    _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,input['branch_id']);
     final id=nonEmpty(input['shift_id'],'shift_id');
     final shift=store.first('''SELECT * FROM cash_shifts
       WHERE id=? AND branch_id=? AND closed_at IS NULL''',[id,branch]);
     if(shift==null) throw DomainError('Open shift not found',404);
-    if(p.role=='cashier' && shift['user_id']!=p.id) {
+    if(p.role!='owner' && p.role!='manager' && shift['user_id']!=p.id) {
       throw DomainError('Only your own shift can be closed',403);
     }
     String? overrideReason;
@@ -1944,7 +1944,7 @@ class PosEngine {
   }
 
   List<Map<String,Object?>> listShifts(Principal p,String branchId) {
-    _allow(p,['owner','manager','cashier']);
+    _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,branchId);
     final shifts=store.rows('''SELECT s.id,s.branch_id,s.user_id,s.drawer_id,
       d.name AS drawer_name,u.username AS operator_name,s.opening_minor,
@@ -1954,9 +1954,12 @@ class PosEngine {
       JOIN users u ON u.id=s.user_id
       WHERE s.branch_id=? ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100''',
       [branch]);
-    if(p.role=='cashier') shifts.removeWhere((s)=>s['user_id']!=p.id);
+    if(p.role=='cashier' || p.role=='purchasing') {
+      shifts.removeWhere((s)=>s['user_id']!=p.id);
+    }
     for(final shift in shifts) {
-      if(shift['closed_at']==null && p.role=='cashier') {
+      if(shift['closed_at']==null &&
+          (p.role=='cashier' || p.role=='purchasing')) {
         shift.remove('closing_expected_minor');
       }
     }

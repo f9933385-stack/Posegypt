@@ -149,6 +149,26 @@ class KasherApi {
       customers:true,branchId:r.url.queryParameters['branch_id'])));
     router.get('/api/v1/suppliers', (Request r)=>_json(engine.listParties(_p(r),
       customers:false,branchId:r.url.queryParameters['branch_id'])));
+    router.get('/api/v1/debts/unallocated', (Request r) {
+      final type=r.url.queryParameters['party_type'];
+      final party=r.url.queryParameters['party_id'];
+      if(type!='customer' && type!='supplier') {
+        throw DomainError('party_type must be customer or supplier');
+      }
+      if(party==null || party.isEmpty) throw DomainError('party_id required');
+      return _json(engine.listLegacyDebtPayments(_p(r),_branch(r),party,
+        customer:type=='customer'));
+    });
+    router.get('/api/v1/debts/reconciliations', (Request r) {
+      final type=r.url.queryParameters['party_type'];
+      final party=r.url.queryParameters['party_id'];
+      if(type!='customer' && type!='supplier') {
+        throw DomainError('party_type must be customer or supplier');
+      }
+      if(party==null || party.isEmpty) throw DomainError('party_id required');
+      return _json(engine.listDebtReconciliations(_p(r),_branch(r),party,
+        customer:type=='customer'));
+    });
     router.get('/api/v1/debts/invoices', (Request r) {
       final type=r.url.queryParameters['party_type'];
       final party=r.url.queryParameters['party_id'];
@@ -193,6 +213,9 @@ class KasherApi {
       'inventory/transfers':'transfer_warehouse','lots/quarantine':'set_lot_quarantine','purchases':'purchase','sales':'sale','sales/returns':'sale_return',
       'purchases/returns':'purchase_return','customers/receipts':'customer_receipt',
       'suppliers/payments':'supplier_payment','expenses':'expense',
+      'debts/reconciliations':'debt_reconciliation_request',
+      'debts/reconciliations/approve':'debt_reconciliation_approve',
+      'debts/reconciliations/reject':'debt_reconciliation_reject',
       'counts':'count_open','counts/lines':'count_line','counts/submit':'count_submit',
       'counts/approve':'count_approve','counts/cancel':'count_cancel',
       'inventory/adjustments':'adjust_stock','inventory/preparations':'prepare',

@@ -46,10 +46,12 @@ void main() {
     final sourceId=returned['id'] as String;
     final first=engine.listDebtInvoices(owner,branch,
       customer['id'] as String,customer:true);
-    final oldInvoice=(first['invoices'] as List<Map<String,Object?>>)
-      .singleWhere((x)=>x['id']==original['id']);
-    expect(oldInvoice['return_credit_minor'],200);
-    expect(oldInvoice['remaining_minor'],0);
+    final originalCredit=store.first('''SELECT amount_minor
+      FROM debt_credit_allocations WHERE document_id=? AND credit_document_id=?''',
+      [original['id'],sourceId]);
+    expect(originalCredit?['amount_minor'],200);
+    expect((first['invoices'] as List<Map<String,Object?>>)
+      .any((x)=>x['id']==original['id']),false);
     expect(first['available_credit_minor'],300);
     expect(engine.dashboard(owner,branch)['customer_credit_balances_minor'],300);
     expect((first['credit_notes'] as List<Map<String,Object?>>)

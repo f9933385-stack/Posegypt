@@ -2104,8 +2104,12 @@ class PosEngine {
   Map<String,Object?> readCashSafe(Principal p,String branchId) {
     _allow(p,['owner','manager','cashier','purchasing']);
     final branch=_branch(p,branchId);
-    final safe=_cashSafe(branch);
-    return {...safe,'balance_minor':_safeBalance(safe['id'] as String)};
+    final safe=store.first('SELECT * FROM cash_safes WHERE branch_id=?',[branch]);
+    if(safe==null) {
+      return {'registered':false,'branch_id':branch,'balance_minor':0};
+    }
+    return {...safe,'registered':true,
+      'balance_minor':_safeBalance(safe['id'] as String)};
   }
 
   List<Map<String,Object?>> listCashSafeDrops(Principal p,String branchId) {

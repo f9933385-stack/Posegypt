@@ -29,7 +29,9 @@ class _DashboardState extends State<DashboardPage> {
           ('قيمة المخزون','stock_value_minor',Icons.inventory_2),
           ('النقدية المحسوبة','cash_minor',Icons.account_balance_wallet_outlined),
           ('ديون العملاء','customer_receivables_minor',Icons.person_outline),
+          ('أرصدة العملاء الدائنة','customer_credit_balances_minor',Icons.account_balance_wallet_outlined),
           ('مستحقات الموردين','supplier_payables_minor',Icons.local_shipping_outlined),
+          ('أرصدة الموردين الدائنة','supplier_credit_balances_minor',Icons.credit_score_outlined),
         ];
         return GridView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),
           gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:columns,

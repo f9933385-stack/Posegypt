@@ -16,7 +16,8 @@ class _DebtsState extends State<DebtsPage> {
   final amount=TextEditingController();
   late Future<List<Map<String,dynamic>>> parties;
   @override void initState(){super.initState();_reload();}
-  void _reload()=>setState(()=>parties=widget.api.list(customer?'customers':'suppliers'));
+  void _reload()=>setState(()=>parties=widget.api.list(
+    customer?'customers':'suppliers',{'branch_id':widget.branchId}));
   @override void dispose(){amount.dispose();super.dispose();}
   Future<void> _submit() async {
     if(partyId==null){alert(context,'اختر العميل أو المورد',error:true);return;}
@@ -31,6 +32,40 @@ class _DebtsState extends State<DebtsPage> {
     }catch(e){alert(context,'تعذر تسجيل الحركة: $e',error:true);}
     finally{if(mounted)setState(()=>saving=false);}
   }
+  Future<void> _statement() async {
+    if(partyId==null) return;
+    try {
+      final statement=await widget.api.get('debts/statement',{
+        'branch_id':widget.branchId,'party_id':partyId!,
+        'party_type':customer?'customer':'supplier'});
+      if(!mounted)return;
+      final entries=statement['entries'] as List<dynamic>;
+      await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('كشف حساب: ${statement['party_name']}'),
+        content:SizedBox(width:620,height:420,child:Column(children:[
+          Text('الرصيد الحالي: ${money(asInt(statement['balance_minor']))}',
+            style:const TextStyle(fontWeight:FontWeight.bold)),
+          const SizedBox(height:12),
+          Expanded(child:entries.isEmpty
+            ? const Center(child:Text('لا توجد حركات مسجلة في هذا الفرع'))
+            : ListView.builder(itemCount:entries.length,itemBuilder:(context,i){
+              final entry=entries[i] as Map<String,dynamic>;
+              final change=asInt(entry['change_minor']);
+              return ListTile(
+                title:Text('${entry['reference_type']} • ${entry['created_at']}'),
+                subtitle:Text('التغير في الدين: ${change>0?'+':''}${money(change)}'),
+                trailing:Text('الرصيد: ${money(asInt(entry['balance_after_minor']))}'));
+            })),
+          const SizedBox(height:8),
+          Text('الرصيد قبل الحركات الظاهرة: ${money(asInt(statement['opening_minor']))}',
+            style:Theme.of(ctx).textTheme.bodySmall),
+        ])),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),
+          child:const Text('إغلاق'))]));
+    }catch(e){
+      if(mounted)alert(context,'تعذر عرض كشف الحساب: $e',error:true);
+    }
+  }
   @override Widget build(BuildContext context)=>SingleChildScrollView(child:Column(
     crossAxisAlignment:CrossAxisAlignment.stretch,children:[
       const SectionTitle('التحصيلات وسداد الموردين',subtitle:'تسويات الديون تؤثر على الحساب النقدي والمديونية فقط، وليس الربح.'),
@@ -43,6 +78,10 @@ class _DebtsState extends State<DebtsPage> {
           items:list.map((p)=>DropdownMenuItem<String>(value:p['id'].toString(),
             child:Text('${p['name']}${p['balance_minor']!=null?' — ${money(asInt(p['balance_minor']))}':''}'))).toList(),
           onChanged:(p)=>setState(()=>partyId=p))),
+      const SizedBox(height:8),Align(alignment:Alignment.centerRight,
+        child:OutlinedButton.icon(onPressed:partyId==null?null:_statement,
+          icon:const Icon(Icons.receipt_long),
+          label:const Text('كشف حساب الفرع'))),
       const SizedBox(height:12),TextField(controller:amount,keyboardType:TextInputType.number,
         decoration:const InputDecoration(labelText:'القيمة بالجنيه')),
       const SizedBox(height:12),DropdownButtonFormField<String>(value:method,

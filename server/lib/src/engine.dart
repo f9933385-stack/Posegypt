@@ -180,6 +180,7 @@ class PosEngine {
       case 'count_cancel': return _cancelCount(p,input);
       case 'adjust_stock': return _adjust(p,input);
       case 'prepare': return _prepare(p,input);
+      case 'cash_drawer_create': return _createCashDrawer(p,input);
       case 'shift_open': return _shiftOpen(p,input);
       case 'shift_close': return _shiftClose(p,input);
       default: throw DomainError('Unknown command',404);
@@ -498,12 +499,35 @@ class PosEngine {
     final debits=lines.fold<int>(0,(sum,x)=>sum+x.debit);
     final credits=lines.fold<int>(0,(sum,x)=>sum+x.credit);
     if(debits!=credits || debits<=0) throw DomainError('Ledger not balanced',500);
-    final entry=_id();
+    final cashLines=lines.where((r)=>r.account=='CASH').toList();
+    final cashDelta=cashLines.fold<int>(0,(sum,l)=>sum+l.debit-l.credit);
+    String? targetShift;
+    // Once a branch opts in to multiple physical drawers, every posted cash
+    // movement must have one unambiguous active shift for its ACTUAL actor.
+    // The guard runs before the journal, stock or document can commit.
+    if(cashLines.isNotEmpty &&
+       store.first('SELECT id FROM cash_drawers WHERE branch_id=? LIMIT 1',[branch])!=null) {
+      final active=store.first('''SELECT s.id FROM cash_shifts s
+        JOIN cash_drawers d ON d.id=s.drawer_id
+        WHERE s.branch_id=? AND s.user_id=? AND s.closed_at IS NULL
+          AND s.drawer_id IS NOT NULL AND d.active=1 AND d.branch_id=?''',
+        [branch,p.id,branch]);
+      if(active==null) {
+        throw DomainError('Open your own active cash drawer shift before posting cash',409);
+      }
+      targetShift=active['id'] as String;
+    }
+    final entry=_id(),at=_now();
     store.exec('INSERT INTO journal_entries(id,branch_id,reference_type,reference_id,created_by,created_at) VALUES(?,?,?,?,?,?)',
-      [entry,branch,type,ref,p.id,_now()]);
+      [entry,branch,type,ref,p.id,at]);
     for(final line in lines) {
       store.exec('INSERT INTO journal_lines(id,entry_id,account,debit_minor,credit_minor) VALUES(?,?,?,?,?)',
         [_id(),entry,line.account,line.debit,line.credit]);
+    }
+    if(targetShift!=null && cashDelta!=0) {
+      store.exec('''INSERT INTO cash_shift_journal_links
+        (journal_entry_id,shift_id,cash_delta_minor,created_at)
+        VALUES(?,?,?,?)''',[entry,targetShift,cashDelta,at]);
     }
   }
   void _audit(Principal p,String action,String entity,Map<String,dynamic> details,[String? branch]) {
@@ -1783,21 +1807,85 @@ class PosEngine {
     _outbox(branch,'preparation',{'id':id,'allocated_cost_minor':cost});
     return {'id':id,'allocated_cost_minor':cost,'waste_qty_milli':consumed-produced};
   }
-  /// Branch-level drawer shift. Only one shared till shift can be open per
-  /// branch; simultaneous cash drawers require explicit per-drawer attribution.
+  /// Optional multi-drawer mode. Existing branches remain in the original
+  /// shared single-shift mode until a manager registers the first drawer.
+  Map<String,Object?> _createCashDrawer(Principal p,Map<String,dynamic> input) {
+    _allow(p,['owner','manager']);
+    final branch=_branch(p,input['branch_id']);
+    final name=nonEmpty(input['name'],'name').trim();
+    if(name.length>60) throw DomainError('Drawer name must be at most 60 characters');
+    final exists=store.first('SELECT id FROM cash_drawers WHERE branch_id=? LIMIT 1',[branch]);
+    if(exists==null &&
+      store.first('SELECT id FROM cash_shifts WHERE branch_id=? AND closed_at IS NULL',
+        [branch])!=null) {
+      throw DomainError('Close the shared shift before activating independent drawers',409);
+    }
+    if(store.first('SELECT id FROM cash_drawers WHERE branch_id=? AND name=?',
+      [branch,name])!=null) {
+      throw DomainError('Drawer name is already registered in this branch',409);
+    }
+    final count=store.first('SELECT COUNT(*) AS n FROM cash_drawers WHERE branch_id=?',
+      [branch])!['n'] as int;
+    if(count>=32) throw DomainError('Maximum 32 drawers per branch',409);
+    final id=_id();
+    store.exec('''INSERT INTO cash_drawers
+      (id,branch_id,name,created_by,created_at) VALUES(?,?,?,?,?)''',
+      [id,branch,name,p.id,_now()]);
+    _audit(p,'cash_drawer.created',id,{'name':name,'mode':'independent'},branch);
+    _outbox(branch,'cash_drawer',{'id':id,'name':name});
+    return {'id':id,'branch_id':branch,'name':name,'active':true};
+  }
+
+  List<Map<String,Object?>> listCashDrawers(Principal p,String branchId) {
+    _allow(p,['owner','manager','cashier']);
+    final branch=_branch(p,branchId);
+    return store.rows('''SELECT d.id,d.branch_id,d.name,d.active,
+      (SELECT s.id FROM cash_shifts s WHERE s.drawer_id=d.id
+        AND s.closed_at IS NULL LIMIT 1) AS open_shift_id
+      FROM cash_drawers d WHERE d.branch_id=? ORDER BY d.name''',[branch]);
+  }
+
   Map<String,Object?> _shiftOpen(Principal p,Map<String,dynamic> input) {
     _allow(p,['owner','manager','cashier']);
     final branch=_branch(p,input['branch_id']);
-    if(store.first('SELECT id FROM cash_shifts WHERE branch_id=? AND closed_at IS NULL',[branch])!=null) {
-      throw DomainError('A shift is already open in this branch',409);
+    final multi=store.first('SELECT id FROM cash_drawers WHERE branch_id=? LIMIT 1',
+      [branch])!=null;
+    String? drawerId;
+    if(multi) {
+      drawerId=nonEmpty(input['cash_drawer_id'],'cash_drawer_id');
+      if(store.first('''SELECT id FROM cash_drawers
+        WHERE id=? AND branch_id=? AND active=1''',[drawerId,branch])==null) {
+        throw DomainError('Active drawer not found for this branch',404);
+      }
+      if(store.first('''SELECT id FROM cash_shifts
+        WHERE branch_id=? AND user_id=? AND closed_at IS NULL''',
+        [branch,p.id])!=null) {
+        throw DomainError('Close your existing branch shift before opening another',409);
+      }
+      if(store.first('''SELECT id FROM cash_shifts
+        WHERE drawer_id=? AND closed_at IS NULL''',[drawerId])!=null) {
+        throw DomainError('Cash drawer already has an open shift',409);
+      }
+    } else {
+      if(input['cash_drawer_id']!=null) {
+        throw DomainError('Register cash drawers before using cash_drawer_id',409);
+      }
+      if(store.first('SELECT id FROM cash_shifts WHERE branch_id=? AND closed_at IS NULL',
+        [branch])!=null) {
+        throw DomainError('A shift is already open in this branch',409);
+      }
     }
     final amount=strictInt(input['opening_minor'],'opening_minor');
-    final id=_id(), opened=_now();
-    store.exec('''INSERT INTO cash_shifts(id,branch_id,user_id,opening_minor,opened_at)
-      VALUES(?,?,?,?,?)''',[id,branch,p.id,amount,opened]);
-    _audit(p,'shift.opened',id,{'opening_minor':amount},branch);
-    _outbox(branch,'shift_open',{'id':id,'opened_at':opened});
-    return {'id':id,'opening_minor':amount,'opened_at':opened};
+    final id=_id(),opened=_now();
+    store.exec('''INSERT INTO cash_shifts
+      (id,branch_id,user_id,drawer_id,opening_minor,opened_at)
+      VALUES(?,?,?,?,?,?)''',[id,branch,p.id,drawerId,amount,opened]);
+    _audit(p,'shift.opened',id,
+      {'opening_minor':amount,'cash_drawer_id':drawerId},branch);
+    _outbox(branch,'shift_open',
+      {'id':id,'opened_at':opened,'cash_drawer_id':drawerId});
+    return {'id':id,'drawer_id':drawerId,
+      'opening_minor':amount,'opened_at':opened};
   }
 
   int _shiftCashDelta(String branch,String since) {
@@ -1807,36 +1895,66 @@ class PosEngine {
       [branch,since])!['total'] as int);
   }
 
+  int _drawerCashDelta(String shiftId) {
+    return store.first('''SELECT COALESCE(SUM(cash_delta_minor),0) AS total
+      FROM cash_shift_journal_links WHERE shift_id=?''',
+      [shiftId])!['total'] as int;
+  }
+
   Map<String,Object?> _shiftClose(Principal p,Map<String,dynamic> input) {
     _allow(p,['owner','manager','cashier']);
     final branch=_branch(p,input['branch_id']);
     final id=nonEmpty(input['shift_id'],'shift_id');
-    final shift=store.first('SELECT * FROM cash_shifts WHERE id=? AND branch_id=? AND closed_at IS NULL',[id,branch]);
+    final shift=store.first('''SELECT * FROM cash_shifts
+      WHERE id=? AND branch_id=? AND closed_at IS NULL''',[id,branch]);
     if(shift==null) throw DomainError('Open shift not found',404);
-    if(p.role=='cashier' && shift['user_id']!=p.id) throw DomainError('Only your own shift can be closed',403);
+    if(p.role=='cashier' && shift['user_id']!=p.id) {
+      throw DomainError('Only your own shift can be closed',403);
+    }
+    String? overrideReason;
+    if(shift['drawer_id']!=null && shift['user_id']!=p.id) {
+      overrideReason=nonEmpty(input['override_reason'],'override_reason');
+      if(overrideReason.length<12 || overrideReason.length>500) {
+        throw DomainError('Supervisor override reason must be 12..500 characters');
+      }
+    }
     final actual=strictInt(input['closing_actual_minor'],'closing_actual_minor');
-    final expected=(shift['opening_minor'] as int)+_shiftCashDelta(branch,shift['opened_at'] as String);
+    final expected=(shift['opening_minor'] as int)+
+      (shift['drawer_id']==null
+        ? _shiftCashDelta(branch,shift['opened_at'] as String)
+        : _drawerCashDelta(id));
     final closed=_now();
     store.exec('''UPDATE cash_shifts SET closing_expected_minor=?,closing_actual_minor=?,closed_at=?
       WHERE id=? AND closed_at IS NULL''',[expected,actual,closed,id]);
     final difference=actual-expected;
-    _audit(p,'shift.closed',id,{'expected_minor':expected,'actual_minor':actual,
-      'difference_minor':difference},branch);
-    _outbox(branch,'shift_close',{'id':id,'closed_at':closed});
-    // Do not automatically book the variance as cash; requires manager review.
-    return {'id':id,'expected_minor':expected,'actual_minor':actual,
+    _audit(p,'shift.closed',id,
+      {'expected_minor':expected,'actual_minor':actual,
+        'difference_minor':difference,'cash_drawer_id':shift['drawer_id'],
+        if(overrideReason!=null) 'override_reason':overrideReason},branch);
+    _outbox(branch,'shift_close',
+      {'id':id,'closed_at':closed,'cash_drawer_id':shift['drawer_id']});
+    // Physical cash is never journal-adjusted automatically from a shortage.
+    return {'id':id,'drawer_id':shift['drawer_id'],
+      'expected_minor':expected,'actual_minor':actual,
       'difference_minor':difference,'closed_at':closed};
   }
 
   List<Map<String,Object?>> listShifts(Principal p,String branchId) {
     _allow(p,['owner','manager','cashier']);
     final branch=_branch(p,branchId);
-    final shifts=store.rows('''SELECT id,branch_id,user_id,opening_minor,
-        closing_expected_minor,closing_actual_minor,opened_at,closed_at
-        FROM cash_shifts WHERE branch_id=? ORDER BY opened_at DESC LIMIT 100''',[branch]);
+    final shifts=store.rows('''SELECT s.id,s.branch_id,s.user_id,s.drawer_id,
+      d.name AS drawer_name,u.username AS operator_name,s.opening_minor,
+      s.closing_expected_minor,s.closing_actual_minor,s.opened_at,s.closed_at
+      FROM cash_shifts s
+      LEFT JOIN cash_drawers d ON d.id=s.drawer_id
+      JOIN users u ON u.id=s.user_id
+      WHERE s.branch_id=? ORDER BY s.opened_at DESC,s.rowid DESC LIMIT 100''',
+      [branch]);
     if(p.role=='cashier') shifts.removeWhere((s)=>s['user_id']!=p.id);
     for(final shift in shifts) {
-      if(shift['closed_at']==null && p.role=='cashier') shift.remove('closing_expected_minor');
+      if(shift['closed_at']==null && p.role=='cashier') {
+        shift.remove('closing_expected_minor');
+      }
     }
     return shifts;
   }

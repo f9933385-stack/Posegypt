@@ -205,9 +205,13 @@ class _CashSafeSectionState extends State<CashSafeSection> {
             icon:const Icon(Icons.account_balance_outlined),
             label:const Text('إنشاء خزينة الفرع')),
         ] else ...[
-          Text('${safe['name']} — الرصيد المتوقع '
-            '${money(asInt(safe['balance_minor']))}',
-            style:const TextStyle(fontWeight:FontWeight.bold)),
+          if(supervisor)
+            Text('${safe['name']} — الرصيد المتوقع '
+              '${money(asInt(safe['balance_minor']))}',
+              style:const TextStyle(fontWeight:FontWeight.bold))
+          else
+            Text('${safe['name']} — خزينة الفرع مسجلة',
+              style:const TextStyle(fontWeight:FontWeight.bold)),
           const Text('الرصيد المعروض هو مجموع تسليمات العهدة المعتمدة '
             'وليس كشف حساب بنكي أو جردًا فعليًا للخزينة.'),
           const SizedBox(height:8),

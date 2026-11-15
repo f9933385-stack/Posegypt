@@ -213,3 +213,4 @@ class _ShiftsPageState extends State<ShiftsPage> {
             ]);
           })),
       ]));
+}
